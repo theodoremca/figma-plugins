@@ -1,0 +1,14 @@
+{
+  "name": "my-figma-toolkit",
+  "version": "1.0.0",
+  "description": "My personal Figma toolkit plugin",
+  "scripts": {
+    "build": "esbuild code.ts --bundle --outfile=dist/code.js --target=es2017",
+    "watch": "esbuild code.ts --bundle --outfile=dist/code.js --target=es2017 --watch"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.100.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.5.0"
+  }
+}

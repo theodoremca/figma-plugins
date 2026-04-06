@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: Inter, system-ui, -apple-system, sans-serif;
+    font-size: 12px;
+    color: #e8e8e8;
+    background: #2c2c2c;
+  }
+  .header {
+    padding: 12px 14px 8px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    border-bottom: 1px solid #3a3a3a;
+    background: #333;
+  }
+  .script-list {
+    padding: 6px;
+  }
+  .script-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .script-item:hover {
+    background: #3a3a3a;
+  }
+  .script-item:active {
+    background: #444;
+  }
+  .script-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .script-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .script-desc {
+    font-size: 11px;
+    color: #999;
+    margin-top: 2px;
+  }
+  .script-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    background: #0d99ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .empty {
+    padding: 40px 14px;
+    text-align: center;
+    color: #666;
+    font-size: 12px;
+  }
+  .status {
+    padding: 8px 14px;
+    font-size: 11px;
+    color: #4ec9b0;
+    border-top: 1px solid #3a3a3a;
+    background: #2a2a2a;
+    display: none;
+  }
+  .status.visible { display: block; }
+  .status.error { color: #f44747; }
+</style>
+</head>
+<body>
+
+<div class="header">My Toolkit</div>
+<div class="script-list" id="list"></div>
+<div class="status" id="status"></div>
+
+<script>
+const list = document.getElementById('list');
+const status = document.getElementById('status');
+
+function showStatus(text, isError) {
+  status.textContent = text;
+  status.className = 'status visible' + (isError ? ' error' : '');
+  setTimeout(() => { status.className = 'status'; }, 3000);
+}
+
+function renderScripts(scripts) {
+  if (!scripts.length) {
+    list.innerHTML = '<div class="empty">No scripts registered yet.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  scripts.forEach((s, i) => {
+    const item = document.createElement('div');
+    item.className = 'script-item';
+    item.innerHTML = `
+      <div class="script-icon">${s.name.charAt(0).toUpperCase()}</div>
+      <div class="script-info">
+        <div class="script-name">${s.name}</div>
+        <div class="script-desc">${s.description}</div>
+      </div>
+    `;
+    item.addEventListener('click', () => {
+      parent.postMessage({ pluginMessage: { type: 'run-script', scriptId: s.id } }, '*');
+    });
+    list.appendChild(item);
+  });
+}
+
+onmessage = (event) => {
+  const msg = event.data.pluginMessage;
+  if (!msg) return;
+  if (msg.type === 'script-list') renderScripts(msg.scripts);
+  if (msg.type === 'done') showStatus('Done!', false);
+  if (msg.type === 'error') showStatus('Error: ' + msg.message, true);
+};
+</script>
+</body>
+</html>
