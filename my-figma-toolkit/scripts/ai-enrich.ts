@@ -26,7 +26,7 @@ export const DEFAULT_AI_SETTINGS: AISettings = {
   ollamaModel: 'qwen2.5-coder:14b',
   ollamaUrl: 'http://localhost:11434',
   geminiApiKey: '',
-  geminiModel: 'gemini-2.0-flash',
+  geminiModel: 'gemini-2.5-flash',
 };
 
 export const AI_SETTINGS_KEY = 'screen-to-json-ai-settings';
@@ -138,6 +138,10 @@ async function ollamaGenerate(prompt: string, settings: AISettings): Promise<str
 // ---- Gemini Client ----
 
 async function geminiGenerate(prompt: string, settings: AISettings): Promise<string> {
+  // Log the URL for debugging (without the full key)
+  const keyPreview = settings.geminiApiKey.slice(0, 8) + '...';
+  console.log(`Gemini: model=${settings.geminiModel}, key=${keyPreview}`);
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent?key=${settings.geminiApiKey}`;
 
   const response = await fetch(url, {
@@ -153,7 +157,6 @@ async function geminiGenerate(prompt: string, settings: AISettings): Promise<str
       ],
       generationConfig: {
         temperature: 0.3,
-        responseMimeType: 'application/json',
       },
     }),
   });
@@ -168,7 +171,14 @@ async function geminiGenerate(prompt: string, settings: AISettings): Promise<str
   if (!candidate?.content?.parts?.[0]?.text) {
     throw new Error('No response from Gemini');
   }
-  return candidate.content.parts[0].text;
+
+  // Extract JSON from response — Gemini may wrap it in markdown code fences
+  let raw = candidate.content.parts[0].text.trim();
+  const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (jsonMatch) {
+    raw = jsonMatch[1].trim();
+  }
+  return raw;
 }
 
 // ---- Main Enrichment Function ----
@@ -245,6 +255,26 @@ export async function fetchOllamaModels(ollamaUrl: string): Promise<string[]> {
     if (!response.ok) return [];
     const data = await response.json();
     return (data.models || []).map((m: any) => m.name);
+  } catch {
+    return [];
+  }
+}
+
+// ---- Fetch available Gemini models ----
+
+export async function fetchGeminiModels(apiKey: string): Promise<string[]> {
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+    );
+    if (!response.ok) return [];
+    const data = await response.json();
+    return (data.models || [])
+      .filter((m: any) =>
+        (m.supportedGenerationMethods || []).includes('generateContent')
+      )
+      .map((m: any) => (m.name as string).replace('models/', ''))
+      .sort();
   } catch {
     return [];
   }

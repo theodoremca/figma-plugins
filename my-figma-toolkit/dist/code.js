@@ -2593,7 +2593,7 @@
     ollamaModel: "qwen2.5-coder:14b",
     ollamaUrl: "http://localhost:11434",
     geminiApiKey: "",
-    geminiModel: "gemini-2.0-flash"
+    geminiModel: "gemini-2.5-flash"
   };
   var AI_SETTINGS_KEY = "screen-to-json-ai-settings";
   var SYSTEM_PROMPT = `You are a UI design analyzer. You receive a JSON representation of Figma screens and return structured analysis.
@@ -2672,6 +2672,8 @@ ${JSON.stringify(trimmed, null, 2)}`;
   }
   async function geminiGenerate(prompt, settings) {
     var _a, _b, _c, _d;
+    const keyPreview = settings.geminiApiKey.slice(0, 8) + "...";
+    console.log(`Gemini: model=${settings.geminiModel}, key=${keyPreview}`);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent?key=${settings.geminiApiKey}`;
     const response = await fetch(url, {
       method: "POST",
@@ -2685,8 +2687,7 @@ ${JSON.stringify(trimmed, null, 2)}`;
           }
         ],
         generationConfig: {
-          temperature: 0.3,
-          responseMimeType: "application/json"
+          temperature: 0.3
         }
       })
     });
@@ -2699,7 +2700,12 @@ ${JSON.stringify(trimmed, null, 2)}`;
     if (!((_d = (_c = (_b = candidate == null ? void 0 : candidate.content) == null ? void 0 : _b.parts) == null ? void 0 : _c[0]) == null ? void 0 : _d.text)) {
       throw new Error("No response from Gemini");
     }
-    return candidate.content.parts[0].text;
+    let raw = candidate.content.parts[0].text.trim();
+    const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      raw = jsonMatch[1].trim();
+    }
+    return raw;
   }
   async function enrichScreenJSON(screenData, settings) {
     try {
@@ -2753,6 +2759,20 @@ ${JSON.stringify(trimmed, null, 2)}`;
       if (!response.ok) return [];
       const data = await response.json();
       return (data.models || []).map((m) => m.name);
+    } catch (e) {
+      return [];
+    }
+  }
+  async function fetchGeminiModels(apiKey) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+      );
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.models || []).filter(
+        (m) => (m.supportedGenerationMethods || []).includes("generateContent")
+      ).map((m) => m.name.replace("models/", "")).sort();
     } catch (e) {
       return [];
     }
@@ -3210,7 +3230,7 @@ ${JSON.stringify(trimmed, null, 2)}`;
     globalThis.setImmediate = (fn, ...args) => setTimeout(fn, 0, ...args);
   }
   var BASE_PATH_KEY = "screen-to-json-base-path";
-  figma.showUI(__html__, { width: 400, height: 560 });
+  figma.showUI(__html__, { width: 400, height: 640 });
   async function init() {
     const scriptList = scripts.map((s) => ({
       id: s.id,
@@ -3252,6 +3272,12 @@ ${JSON.stringify(trimmed, null, 2)}`;
       const url = msg.url || "http://localhost:11434";
       fetchOllamaModels(url).then((models) => {
         figma.ui.postMessage({ type: "ollama-models", models });
+      });
+    }
+    if (msg.type === "fetch-gemini-models") {
+      const apiKey = msg.apiKey || "";
+      fetchGeminiModels(apiKey).then((models) => {
+        figma.ui.postMessage({ type: "gemini-models", models });
       });
     }
   };

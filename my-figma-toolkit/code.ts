@@ -4,12 +4,12 @@ if (typeof setImmediate === 'undefined') {
 }
 
 import { scripts } from './scripts';
-import { AI_SETTINGS_KEY, DEFAULT_AI_SETTINGS, fetchOllamaModels } from './scripts/ai-enrich';
+import { AI_SETTINGS_KEY, DEFAULT_AI_SETTINGS, fetchOllamaModels, fetchGeminiModels } from './scripts/ai-enrich';
 import type { AISettings } from './scripts/ai-enrich';
 
 const BASE_PATH_KEY = 'screen-to-json-base-path';
 
-figma.showUI(__html__, { width: 400, height: 560 });
+figma.showUI(__html__, { width: 400, height: 640 });
 
 // Send the script list + saved settings to the UI on launch
 async function init() {
@@ -68,6 +68,14 @@ figma.ui.onmessage = (msg: { type: string; scriptId?: string; path?: string; set
     const url = (msg as any).url || 'http://localhost:11434';
     fetchOllamaModels(url).then(models => {
       figma.ui.postMessage({ type: 'ollama-models', models });
+    });
+  }
+
+  // Fetch Gemini models
+  if (msg.type === 'fetch-gemini-models') {
+    const apiKey = (msg as any).apiKey || '';
+    fetchGeminiModels(apiKey).then(models => {
+      figma.ui.postMessage({ type: 'gemini-models', models });
     });
   }
 };

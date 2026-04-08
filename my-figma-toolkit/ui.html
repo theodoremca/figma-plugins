@@ -31,7 +31,7 @@
   }
   .header .settings-btn:hover { color: #fff; }
 
-  .view { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+  .view { display: none; flex-direction: column; flex: 1; min-height: 0; }
   .view.active { display: flex; }
 
   /* Script List */
@@ -189,6 +189,11 @@
 
         <!-- Ollama settings -->
         <div class="provider-section active" id="ollamaSettings">
+          <div class="settings-hint" style="color:#f5a623">
+            Ollama needs CORS enabled. Run in terminal:<br>
+            <code style="color:#4ec9b0">launchctl setenv OLLAMA_ORIGINS "*"</code><br>
+            then restart Ollama.
+          </div>
           <label class="settings-label">
             Ollama URL
           </label>
@@ -208,11 +213,12 @@
           <label class="settings-label">API Key</label>
           <input class="settings-input" id="geminiKeyInput" type="password"
             placeholder="AIza..." spellcheck="false" />
-          <label class="settings-label">Model</label>
+          <label class="settings-label">
+            Model
+            <button class="fetch-btn" id="fetchGeminiModelsBtn">Refresh</button>
+          </label>
           <select class="settings-select" id="geminiModelSelect">
-            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-            <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</option>
-            <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
           </select>
         </div>
       </div>
@@ -272,6 +278,7 @@ const geminiSettings = document.getElementById('geminiSettings');
 const ollamaUrlInput = document.getElementById('ollamaUrlInput');
 const ollamaModelSelect = document.getElementById('ollamaModelSelect');
 const fetchModelsBtn = document.getElementById('fetchModelsBtn');
+const fetchGeminiModelsBtn = document.getElementById('fetchGeminiModelsBtn');
 const geminiKeyInput = document.getElementById('geminiKeyInput');
 const geminiModelSelect = document.getElementById('geminiModelSelect');
 
@@ -367,6 +374,15 @@ fetchModelsBtn.addEventListener('click', () => {
   fetchModelsBtn.textContent = '...';
   parent.postMessage({
     pluginMessage: { type: 'fetch-ollama-models', url: ollamaUrlInput.value.trim() }
+  }, '*');
+});
+
+fetchGeminiModelsBtn.addEventListener('click', () => {
+  const key = geminiKeyInput.value.trim();
+  if (!key) { alert('Enter your Gemini API key first'); return; }
+  fetchGeminiModelsBtn.textContent = '...';
+  parent.postMessage({
+    pluginMessage: { type: 'fetch-gemini-models', apiKey: key }
   }, '*');
 });
 
@@ -489,6 +505,27 @@ onmessage = (event) => {
         opt.textContent = m;
         if (m === savedAiSettings.ollamaModel) opt.selected = true;
         ollamaModelSelect.appendChild(opt);
+      });
+    }
+  }
+
+  // Gemini models fetched
+  if (msg.type === 'gemini-models') {
+    fetchGeminiModelsBtn.textContent = 'Refresh';
+    const models = msg.models || [];
+    geminiModelSelect.innerHTML = '';
+    if (models.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No models found (check API key)';
+      geminiModelSelect.appendChild(opt);
+    } else {
+      models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        if (m === savedAiSettings.geminiModel) opt.selected = true;
+        geminiModelSelect.appendChild(opt);
       });
     }
   }
