@@ -2596,6 +2596,22 @@
     geminiModel: "gemini-2.5-flash"
   };
   var AI_SETTINGS_KEY = "screen-to-json-ai-settings";
+  var PRICING = {
+    // Gemini
+    "gemini-2.5-flash": { input: 0.15, output: 0.6 },
+    "gemini-2.5-flash-lite": { input: 0.05, output: 0.2 },
+    "gemini-2.5-pro": { input: 1.25, output: 5 },
+    "gemini-2.0-flash": { input: 0.1, output: 0.4 },
+    "gemini-2.0-flash-lite": { input: 0.05, output: 0.2 },
+    "gemini-1.5-flash": { input: 0.075, output: 0.3 },
+    "gemini-1.5-pro": { input: 1.25, output: 5 },
+    // Ollama (local = free)
+    "_ollama_default": { input: 0, output: 0 }
+  };
+  function estimateCost(model, promptTokens, completionTokens) {
+    const price = PRICING[model] || PRICING["_ollama_default"];
+    return promptTokens / 1e6 * price.input + completionTokens / 1e6 * price.output;
+  }
   var SYSTEM_PROMPT = `You are a UI design analyzer. You receive a JSON representation of Figma screens and return structured analysis.
 
 Your job is to add SEMANTIC CONTEXT that helps a code assistant (Claude Code) understand what things ARE, not just how they look.
@@ -2668,12 +2684,17 @@ ${JSON.stringify(trimmed, null, 2)}`;
       throw new Error(`Ollama error ${response.status}: ${text}`);
     }
     const data = await response.json();
-    return data.response;
+    return {
+      text: data.response,
+      usage: {
+        promptTokens: data.prompt_eval_count || 0,
+        completionTokens: data.eval_count || 0,
+        totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0)
+      }
+    };
   }
   async function geminiGenerate(prompt, settings) {
     var _a, _b, _c, _d;
-    const keyPreview = settings.geminiApiKey.slice(0, 8) + "...";
-    console.log(`Gemini: model=${settings.geminiModel}, key=${keyPreview}`);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent?key=${settings.geminiApiKey}`;
     const response = await fetch(url, {
       method: "POST",
@@ -2705,28 +2726,48 @@ ${JSON.stringify(trimmed, null, 2)}`;
     if (jsonMatch) {
       raw = jsonMatch[1].trim();
     }
-    return raw;
+    const usage = data.usageMetadata || {};
+    return {
+      text: raw,
+      usage: {
+        promptTokens: usage.promptTokenCount || 0,
+        completionTokens: usage.candidatesTokenCount || 0,
+        totalTokens: usage.totalTokenCount || 0
+      }
+    };
   }
   async function enrichScreenJSON(screenData, settings) {
     try {
+      const startTime = Date.now();
       const userPrompt = buildUserPrompt({
         screens: screenData.screens,
         reusableComponents: screenData.reusableComponents
       });
-      let rawResponse;
+      let result;
       if (settings.provider === "ollama") {
-        rawResponse = await ollamaGenerate(userPrompt, settings);
+        result = await ollamaGenerate(userPrompt, settings);
       } else {
-        rawResponse = await geminiGenerate(userPrompt, settings);
+        result = await geminiGenerate(userPrompt, settings);
       }
-      const enrichment = JSON.parse(rawResponse);
+      const durationMs = Date.now() - startTime;
+      const model = settings.provider === "ollama" ? settings.ollamaModel : settings.geminiModel;
+      const enrichment = JSON.parse(result.text);
       if (!enrichment.screenSummaries || typeof enrichment.screenSummaries !== "object") {
         enrichment.screenSummaries = {};
       }
       if (!enrichment.semanticRoles || typeof enrichment.semanticRoles !== "object") {
         enrichment.semanticRoles = {};
       }
-      return enrichment;
+      const usage = {
+        provider: settings.provider,
+        model,
+        promptTokens: result.usage.promptTokens,
+        completionTokens: result.usage.completionTokens,
+        totalTokens: result.usage.totalTokens,
+        estimatedCostUSD: estimateCost(model, result.usage.promptTokens, result.usage.completionTokens),
+        durationMs
+      };
+      return { enrichment, usage };
     } catch (err) {
       console.error("AI enrichment failed:", err);
       figma.notify("AI enrichment failed: " + (err.message || String(err)), { timeout: 5e3 });
@@ -3165,13 +3206,13 @@ ${JSON.stringify(trimmed, null, 2)}`;
       if (aiSettings.enabled) {
         figma.notify(`Analyzing with AI (${aiSettings.provider})...`);
         figma.ui.postMessage({ type: "ai-status", status: "running" });
-        const enrichment = await enrichScreenJSON({ screens, reusableComponents }, aiSettings);
-        if (enrichment) {
+        const result = await enrichScreenJSON({ screens, reusableComponents }, aiSettings);
+        if (result) {
           aiEnriched = true;
-          applyEnrichment(screens, enrichment);
-          flowDescription = enrichment.flowDescription;
-          sharedComponents = enrichment.sharedComponents;
-          figma.ui.postMessage({ type: "ai-status", status: "done" });
+          applyEnrichment(screens, result.enrichment);
+          flowDescription = result.enrichment.flowDescription;
+          sharedComponents = result.enrichment.sharedComponents;
+          figma.ui.postMessage({ type: "ai-status", status: "done", usage: result.usage });
         } else {
           figma.ui.postMessage({ type: "ai-status", status: "failed" });
         }

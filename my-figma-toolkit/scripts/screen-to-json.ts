@@ -1,7 +1,7 @@
 import { Script } from './types';
 import JSZip from 'jszip';
 import { enrichScreenJSON, applyEnrichment, AI_SETTINGS_KEY, DEFAULT_AI_SETTINGS } from './ai-enrich';
-import type { AISettings } from './ai-enrich';
+import type { AISettings, AIUsage } from './ai-enrich';
 
 // ============================================================
 // Screen to JSON — Extracts a detailed JSON blueprint from
@@ -665,14 +665,14 @@ const screenToJson: Script = {
       figma.notify(`Analyzing with AI (${aiSettings.provider})...`);
       figma.ui.postMessage({ type: 'ai-status', status: 'running' });
 
-      const enrichment = await enrichScreenJSON({ screens, reusableComponents }, aiSettings);
+      const result = await enrichScreenJSON({ screens, reusableComponents }, aiSettings);
 
-      if (enrichment) {
+      if (result) {
         aiEnriched = true;
-        applyEnrichment(screens, enrichment);
-        flowDescription = enrichment.flowDescription;
-        sharedComponents = enrichment.sharedComponents;
-        figma.ui.postMessage({ type: 'ai-status', status: 'done' });
+        applyEnrichment(screens, result.enrichment);
+        flowDescription = result.enrichment.flowDescription;
+        sharedComponents = result.enrichment.sharedComponents;
+        figma.ui.postMessage({ type: 'ai-status', status: 'done', usage: result.usage });
       } else {
         figma.ui.postMessage({ type: 'ai-status', status: 'failed' });
       }

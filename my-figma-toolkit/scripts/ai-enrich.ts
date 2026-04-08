@@ -31,6 +31,16 @@ export const DEFAULT_AI_SETTINGS: AISettings = {
 
 export const AI_SETTINGS_KEY = 'screen-to-json-ai-settings';
 
+export interface AIUsage {
+  provider: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimatedCostUSD: number;
+  durationMs: number;
+}
+
 interface AIEnrichment {
   screenSummaries: Record<string, string>;          // screenId → summary
   semanticRoles: Record<string, string>;            // nodeId → role
@@ -40,6 +50,34 @@ interface AIEnrichment {
     description: string;
     foundInScreens: string[];
   }>;
+}
+
+interface AIRawResult {
+  text: string;
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+}
+
+// Cost per 1M tokens (input/output) — updated April 2026
+const PRICING: Record<string, { input: number; output: number }> = {
+  // Gemini
+  'gemini-2.5-flash':       { input: 0.15,  output: 0.60 },
+  'gemini-2.5-flash-lite':  { input: 0.05,  output: 0.20 },
+  'gemini-2.5-pro':         { input: 1.25,  output: 5.00 },
+  'gemini-2.0-flash':       { input: 0.10,  output: 0.40 },
+  'gemini-2.0-flash-lite':  { input: 0.05,  output: 0.20 },
+  'gemini-1.5-flash':       { input: 0.075, output: 0.30 },
+  'gemini-1.5-pro':         { input: 1.25,  output: 5.00 },
+  // Ollama (local = free)
+  '_ollama_default':        { input: 0, output: 0 },
+};
+
+function estimateCost(model: string, promptTokens: number, completionTokens: number): number {
+  const price = PRICING[model] || PRICING['_ollama_default'];
+  return (promptTokens / 1_000_000) * price.input + (completionTokens / 1_000_000) * price.output;
 }
 
 // ---- System Prompt ----
@@ -107,7 +145,7 @@ function trimForAI(obj: any, depth: number, maxDepth: number): any {
 
 // ---- Ollama Client ----
 
-async function ollamaGenerate(prompt: string, settings: AISettings): Promise<string> {
+async function ollamaGenerate(prompt: string, settings: AISettings): Promise<AIRawResult> {
   const url = `${settings.ollamaUrl}/api/generate`;
 
   const response = await fetch(url, {
@@ -132,16 +170,19 @@ async function ollamaGenerate(prompt: string, settings: AISettings): Promise<str
   }
 
   const data = await response.json();
-  return data.response;
+  return {
+    text: data.response,
+    usage: {
+      promptTokens: data.prompt_eval_count || 0,
+      completionTokens: data.eval_count || 0,
+      totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
+    },
+  };
 }
 
 // ---- Gemini Client ----
 
-async function geminiGenerate(prompt: string, settings: AISettings): Promise<string> {
-  // Log the URL for debugging (without the full key)
-  const keyPreview = settings.geminiApiKey.slice(0, 8) + '...';
-  console.log(`Gemini: model=${settings.geminiModel}, key=${keyPreview}`);
-
+async function geminiGenerate(prompt: string, settings: AISettings): Promise<AIRawResult> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent?key=${settings.geminiApiKey}`;
 
   const response = await fetch(url, {
@@ -178,31 +219,51 @@ async function geminiGenerate(prompt: string, settings: AISettings): Promise<str
   if (jsonMatch) {
     raw = jsonMatch[1].trim();
   }
-  return raw;
+
+  // Extract token usage from Gemini metadata
+  const usage = data.usageMetadata || {};
+  return {
+    text: raw,
+    usage: {
+      promptTokens: usage.promptTokenCount || 0,
+      completionTokens: usage.candidatesTokenCount || 0,
+      totalTokens: usage.totalTokenCount || 0,
+    },
+  };
 }
 
 // ---- Main Enrichment Function ----
 
+export interface EnrichmentResult {
+  enrichment: AIEnrichment;
+  usage: AIUsage;
+}
+
 export async function enrichScreenJSON(
   screenData: { screens: any[]; reusableComponents: any },
   settings: AISettings
-): Promise<AIEnrichment | null> {
+): Promise<EnrichmentResult | null> {
   try {
+    const startTime = Date.now();
+
     const userPrompt = buildUserPrompt({
       screens: screenData.screens,
       reusableComponents: screenData.reusableComponents,
     });
 
-    let rawResponse: string;
+    let result: AIRawResult;
 
     if (settings.provider === 'ollama') {
-      rawResponse = await ollamaGenerate(userPrompt, settings);
+      result = await ollamaGenerate(userPrompt, settings);
     } else {
-      rawResponse = await geminiGenerate(userPrompt, settings);
+      result = await geminiGenerate(userPrompt, settings);
     }
 
+    const durationMs = Date.now() - startTime;
+    const model = settings.provider === 'ollama' ? settings.ollamaModel : settings.geminiModel;
+
     // Parse the AI response
-    const enrichment: AIEnrichment = JSON.parse(rawResponse);
+    const enrichment: AIEnrichment = JSON.parse(result.text);
 
     // Validate structure
     if (!enrichment.screenSummaries || typeof enrichment.screenSummaries !== 'object') {
@@ -212,7 +273,17 @@ export async function enrichScreenJSON(
       enrichment.semanticRoles = {};
     }
 
-    return enrichment;
+    const usage: AIUsage = {
+      provider: settings.provider,
+      model,
+      promptTokens: result.usage.promptTokens,
+      completionTokens: result.usage.completionTokens,
+      totalTokens: result.usage.totalTokens,
+      estimatedCostUSD: estimateCost(model, result.usage.promptTokens, result.usage.completionTokens),
+      durationMs,
+    };
+
+    return { enrichment, usage };
   } catch (err: any) {
     console.error('AI enrichment failed:', err);
     figma.notify('AI enrichment failed: ' + (err.message || String(err)), { timeout: 5000 });

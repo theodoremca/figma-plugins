@@ -129,6 +129,16 @@
     background: #9333ea; color: #fff; font-size: 9px; font-weight: 700;
     padding: 2px 6px; border-radius: 3px; text-transform: uppercase;
   }
+  .ai-usage-bar {
+    display: none; padding: 6px 12px; background: #1a1a2e; border-bottom: 1px solid #3a3a3a;
+    font-size: 10px; color: #999; flex-shrink: 0;
+    font-family: 'SF Mono', monospace;
+  }
+  .ai-usage-bar.visible { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .ai-usage-bar .usage-item { display: flex; gap: 4px; align-items: center; }
+  .ai-usage-bar .usage-label { color: #666; }
+  .ai-usage-bar .usage-value { color: #9333ea; font-weight: 600; }
+  .ai-usage-bar .usage-cost { color: #4ec9b0; font-weight: 700; }
   .json-output { flex: 1; overflow: auto; padding: 10px 12px; background: #1e1e1e; }
   .json-output pre {
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
@@ -243,6 +253,12 @@
     <button class="zip-btn" id="zipBtn" disabled>Save ZIP</button>
     <button class="copy-btn" id="copyBtn">Copy JSON</button>
   </div>
+  <div class="ai-usage-bar" id="aiUsageBar">
+    <span class="usage-item"><span class="usage-label">Model:</span> <span class="usage-value" id="usageModel">—</span></span>
+    <span class="usage-item"><span class="usage-label">Tokens:</span> <span class="usage-value" id="usageTokens">—</span></span>
+    <span class="usage-item"><span class="usage-label">Time:</span> <span class="usage-value" id="usageDuration">—</span></span>
+    <span class="usage-item"><span class="usage-label">Cost:</span> <span class="usage-cost" id="usageCost">—</span></span>
+  </div>
   <div class="json-output" id="jsonOutput">
     <pre id="jsonPre"></pre>
   </div>
@@ -279,6 +295,11 @@ const ollamaUrlInput = document.getElementById('ollamaUrlInput');
 const ollamaModelSelect = document.getElementById('ollamaModelSelect');
 const fetchModelsBtn = document.getElementById('fetchModelsBtn');
 const fetchGeminiModelsBtn = document.getElementById('fetchGeminiModelsBtn');
+const aiUsageBar = document.getElementById('aiUsageBar');
+const usageModel = document.getElementById('usageModel');
+const usageTokens = document.getElementById('usageTokens');
+const usageDuration = document.getElementById('usageDuration');
+const usageCost = document.getElementById('usageCost');
 const geminiKeyInput = document.getElementById('geminiKeyInput');
 const geminiModelSelect = document.getElementById('geminiModelSelect');
 
@@ -444,6 +465,7 @@ backBtn.addEventListener('click', () => {
   zipBtn.disabled = true;
   zipBtn.textContent = 'Save ZIP';
   aiBadge.style.display = 'none';
+  aiUsageBar.className = 'ai-usage-bar';
   jsonPre.innerHTML = '';
   clearStatus();
   showView('list');
@@ -532,8 +554,19 @@ onmessage = (event) => {
 
   // AI status updates
   if (msg.type === 'ai-status') {
-    if (msg.status === 'running') showStatus('Analyzing with AI...', false, true);
-    if (msg.status === 'done') clearStatus();
+    if (msg.status === 'running') {
+      showStatus('Analyzing with AI...', false, true);
+      aiUsageBar.className = 'ai-usage-bar';
+    }
+    if (msg.status === 'done' && msg.usage) {
+      clearStatus();
+      const u = msg.usage;
+      usageModel.textContent = u.model;
+      usageTokens.textContent = u.promptTokens.toLocaleString() + ' in / ' + u.completionTokens.toLocaleString() + ' out (' + u.totalTokens.toLocaleString() + ')';
+      usageDuration.textContent = (u.durationMs / 1000).toFixed(1) + 's';
+      usageCost.textContent = u.estimatedCostUSD > 0 ? '$' + u.estimatedCostUSD.toFixed(6) : 'Free (local)';
+      aiUsageBar.className = 'ai-usage-bar visible';
+    }
     if (msg.status === 'failed') showStatus('AI enrichment failed (exported without AI)', true, false);
   }
 
