@@ -8,7 +8,11 @@
   },
   "devDependencies": {
     "@figma/plugin-typings": "^1.100.0",
+    "@types/jszip": "^3.4.1",
     "esbuild": "^0.21.0",
     "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
   }
 }

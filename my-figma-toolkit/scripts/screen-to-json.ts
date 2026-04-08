@@ -1,8 +1,20 @@
 import { Script } from './types';
+import JSZip from 'jszip';
 
 // ============================================================
 // Screen to JSON — Extracts a detailed JSON blueprint from
 // selected Figma frames/screens for AI-driven UI generation.
+//
+// Everything is bundled into a single ZIP file:
+//   figma-export.zip
+//     ├── screen.json          (the full JSON blueprint)
+//     └── images/
+//         ├── avatar-12-34@1.5x.png
+//         ├── avatar-12-34@1.5x.jpg
+//         └── ...
+//
+// ONE save dialog. Unzip and you have everything.
+// JSON references images as: "images/avatar-12-34@1.5x.png"
 // ============================================================
 
 interface NodeJSON {
@@ -74,9 +86,9 @@ interface NodeJSON {
   textCase?: string;
   paragraphSpacing?: number;
 
-  // Image
+  // Image — paths relative to the ZIP root
   imageRef?: string;
-  figmaImageUrl?: string;
+  imageFiles?: { png: string; jpeg: string };
 
   // Component info
   isComponent?: boolean;
@@ -103,7 +115,7 @@ interface SerializedPaint {
   gradientTransform?: number[][];
   scaleMode?: string;
   imageRef?: string;
-  figmaImageUrl?: string;
+  imageFiles?: { png: string; jpeg: string };
 }
 
 interface SerializedEffect {
@@ -119,11 +131,32 @@ interface SerializedEffect {
 interface ScreenJSON {
   exportedAt: string;
   figmaFileKey: string;
+  exportPath: string;
+  imageScale: number;
+  imageFormats: string[];
   screens: NodeJSON[];
   reusableComponents: Record<string, { name: string; usageCount: number; firstInstanceId: string }>;
+  exportedImages: string[];
+}
+
+interface ImageExportTask {
+  nodeId: string;
+  node: SceneNode;
+  baseName: string;
 }
 
 // ---- Helpers ----
+
+const IMAGE_SCALE = 1.5;
+const IMAGES_FOLDER = 'images';
+const CLIENT_STORAGE_KEY = 'screen-to-json-base-path';
+
+/** Generate a timestamp string like 2026-04-08-104416 */
+function generateTimestamp(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
 
 function rgbaFromFigma(color: RGB | RGBA, opacity?: number): { r: number; g: number; b: number; a: number } {
   return {
@@ -134,7 +167,23 @@ function rgbaFromFigma(color: RGB | RGBA, opacity?: number): { r: number; g: num
   };
 }
 
-function serializePaint(paint: Paint, fileKey: string): SerializedPaint {
+/** Create a filesystem-safe base name from a node name + short id suffix */
+function safeFilename(name: string, nodeId: string): string {
+  const clean = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  const idSuffix = nodeId.replace(':', '-');
+  return `${clean}-${idSuffix}`;
+}
+
+/** Path inside the ZIP for an image file */
+function zipImagePath(baseName: string, ext: string): string {
+  return `${IMAGES_FOLDER}/${baseName}@1.5x.${ext}`;
+}
+
+function serializePaint(paint: Paint, _fileKey: string): SerializedPaint {
   const base: SerializedPaint = {
     type: paint.type,
     visible: paint.visible !== false,
@@ -163,7 +212,6 @@ function serializePaint(paint: Paint, fileKey: string): SerializedPaint {
     base.scaleMode = paint.scaleMode;
     if (paint.imageHash) {
       base.imageRef = paint.imageHash;
-      base.figmaImageUrl = `https://figma-alpha-api.s3.us-west-2.amazonaws.com/images/${fileKey}/${paint.imageHash}`;
     }
   }
 
@@ -194,8 +242,6 @@ function serializeEffect(effect: Effect): SerializedEffect {
 }
 
 function getFileKey(): string {
-  // Figma plugin API doesn't directly expose file key,
-  // but we can extract it from the document root
   try {
     return (figma as any).fileKey || 'unknown';
   } catch {
@@ -205,6 +251,11 @@ function getFileKey(): string {
 
 // Track component usage for reusable component detection
 const componentUsageMap = new Map<string, { name: string; count: number; firstInstanceId: string }>();
+
+// Collect nodes that need image export
+const imageExportTasks: ImageExportTask[] = [];
+// Map from imageRef (hash or nodeId) to the generated filenames inside the ZIP
+const imageFileMap = new Map<string, { png: string; jpeg: string }>();
 
 function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
   const json: NodeJSON = {
@@ -244,7 +295,7 @@ function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
 
   // Auto Layout
   if ('layoutMode' in node && node.layoutMode !== 'NONE') {
-    json.layoutMode = node.layoutMode; // HORIZONTAL or VERTICAL
+    json.layoutMode = node.layoutMode;
     json.primaryAxisAlignItems = node.primaryAxisAlignItems;
     json.counterAxisAlignItems = node.counterAxisAlignItems;
     json.primaryAxisSizingMode = node.primaryAxisSizingMode;
@@ -284,7 +335,7 @@ function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
   if ('strokes' in node && Array.isArray(node.strokes) && node.strokes.length > 0) {
     json.strokes = (node.strokes as Paint[]).map(f => serializePaint(f, fileKey));
     if ('strokeWeight' in node) {
-      json.strokeWeight = node.strokeWeight;
+      json.strokeWeight = node.strokeWeight === figma.mixed ? 'mixed' as any : node.strokeWeight;
     }
     if ('strokeAlign' in node) {
       json.strokeAlign = node.strokeAlign;
@@ -328,7 +379,7 @@ function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
     const fontName = node.fontName;
     if (fontName !== figma.mixed) {
       json.fontFamily = fontName.family;
-      json.fontWeight = fontName.style; // e.g. "Bold", "Regular", "Semi Bold"
+      json.fontWeight = fontName.style;
     }
 
     json.textAlignHorizontal = node.textAlignHorizontal;
@@ -370,7 +421,6 @@ function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
     json.isInstance = true;
     json.componentName = node.name;
 
-    // Track main component for reusable component detection
     const mainComponent = node.mainComponent;
     if (mainComponent) {
       json.componentId = mainComponent.id;
@@ -386,7 +436,6 @@ function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
       }
     }
 
-    // Component properties (variant values, boolean props, etc.)
     try {
       const props = node.componentProperties;
       if (props && Object.keys(props).length > 0) {
@@ -403,15 +452,47 @@ function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
     }
   }
 
-  // Detect image fills and provide Figma image URL
+  // Detect image fills — queue node for export
+  let hasImageFill = false;
   if ('fills' in node && node.fills !== figma.mixed && Array.isArray(node.fills)) {
     for (const fill of node.fills as Paint[]) {
       if (fill.type === 'IMAGE' && fill.imageHash) {
+        hasImageFill = true;
         json.imageRef = fill.imageHash;
-        json.figmaImageUrl = `https://figma-alpha-api.s3.us-west-2.amazonaws.com/images/${fileKey}/${fill.imageHash}`;
+
+        // Check if we already queued this hash (same image used on multiple nodes)
+        if (!imageFileMap.has(fill.imageHash)) {
+          const baseName = safeFilename(node.name, node.id);
+          imageFileMap.set(fill.imageHash, {
+            png: zipImagePath(baseName, 'png'),
+            jpeg: zipImagePath(baseName, 'jpg'),
+          });
+          imageExportTasks.push({ nodeId: node.id, node, baseName });
+        }
+
+        json.imageFiles = imageFileMap.get(fill.imageHash);
         break;
       }
     }
+  }
+
+  // Also export vector/icon nodes that aren't simple rectangles
+  if (
+    !hasImageFill &&
+    (node.type === 'VECTOR' ||
+      node.type === 'BOOLEAN_OPERATION' ||
+      node.type === 'STAR' ||
+      node.type === 'POLYGON' ||
+      node.type === 'LINE')
+  ) {
+    const baseName = safeFilename(node.name, node.id);
+    const files = {
+      png: zipImagePath(baseName, 'png'),
+      jpeg: zipImagePath(baseName, 'jpg'),
+    };
+    imageFileMap.set(node.id, files);
+    imageExportTasks.push({ nodeId: node.id, node, baseName });
+    json.imageFiles = files;
   }
 
   // Traverse children
@@ -419,7 +500,7 @@ function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
     const childNodes = (node as FrameNode).children;
     if (childNodes && childNodes.length > 0) {
       json.children = childNodes
-        .filter(child => child.visible) // skip hidden layers
+        .filter(child => child.visible)
         .map(child => traverseNode(child, fileKey));
     }
   }
@@ -427,10 +508,51 @@ function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
   return json;
 }
 
+/** Patch image file references into fills that have imageRef */
+function patchFillImageFiles(json: NodeJSON): void {
+  if (json.fills) {
+    for (const fill of json.fills) {
+      if (fill.imageRef && imageFileMap.has(fill.imageRef)) {
+        fill.imageFiles = imageFileMap.get(fill.imageRef);
+      }
+    }
+  }
+  if (json.children) {
+    for (const child of json.children) {
+      patchFillImageFiles(child);
+    }
+  }
+}
+
+/** Rewrite all imageFiles paths to full absolute paths */
+function patchFullPaths(nodes: NodeJSON[], fullBasePath: string): void {
+  for (const node of nodes) {
+    if (node.imageFiles) {
+      node.imageFiles = {
+        png: `${fullBasePath}/${node.imageFiles.png}`,
+        jpeg: `${fullBasePath}/${node.imageFiles.jpeg}`,
+      };
+    }
+    if (node.fills) {
+      for (const fill of node.fills) {
+        if (fill.imageFiles) {
+          fill.imageFiles = {
+            png: `${fullBasePath}/${fill.imageFiles.png}`,
+            jpeg: `${fullBasePath}/${fill.imageFiles.jpeg}`,
+          };
+        }
+      }
+    }
+    if (node.children) {
+      patchFullPaths(node.children, fullBasePath);
+    }
+  }
+}
+
 const screenToJson: Script = {
   id: 'screen-to-json',
   name: 'Screen to JSON',
-  description: 'Generate a detailed AI-ready JSON from selected screens',
+  description: 'Generate a detailed AI-ready JSON from selected screens (ZIP with images)',
   async run() {
     const selection = figma.currentPage.selection;
 
@@ -439,17 +561,80 @@ const screenToJson: Script = {
       return;
     }
 
-    // Reset component usage tracking
+    // Read the saved base path (e.g. "~/projects/figma/assets")
+    let basePath: string = await figma.clientStorage.getAsync(CLIENT_STORAGE_KEY) || '';
+    if (!basePath) {
+      figma.notify('Set your export base path first (in plugin settings).');
+      figma.ui.postMessage({ type: 'show-settings' });
+      return;
+    }
+    // Ensure no trailing slash
+    basePath = basePath.replace(/\/+$/, '');
+
+    // Generate timestamp for this export
+    const timestamp = generateTimestamp();
+    const zipFolderName = `figma-export-${timestamp}`;
+    const fullBasePath = `${basePath}/${zipFolderName}`;
+
+    // Reset tracking
     componentUsageMap.clear();
+    imageExportTasks.length = 0;
+    imageFileMap.clear();
 
     const fileKey = getFileKey();
     const screens: NodeJSON[] = [];
 
+    // Phase 1: Traverse and build JSON (also collects image export tasks)
+    figma.notify('Scanning screens...');
     for (const node of selection) {
       screens.push(traverseNode(node, fileKey));
     }
 
-    // Build reusable components map (components used 2+ times across all screens)
+    // Patch fill imageFiles references
+    for (const screen of screens) {
+      patchFillImageFiles(screen);
+    }
+
+    // Phase 2: Create ZIP and export images into it
+    const zip = new JSZip();
+    const allExportedFiles: string[] = [];
+
+    if (imageExportTasks.length > 0) {
+      figma.notify(`Exporting ${imageExportTasks.length} image(s) at ${IMAGE_SCALE}x...`);
+
+      for (const task of imageExportTasks) {
+        try {
+          const pngBytes = await task.node.exportAsync({
+            format: 'PNG',
+            constraint: { type: 'SCALE', value: IMAGE_SCALE },
+          });
+
+          const jpgBytes = await task.node.exportAsync({
+            format: 'JPG',
+            constraint: { type: 'SCALE', value: IMAGE_SCALE },
+          });
+
+          const pngZipPath = zipImagePath(task.baseName, 'png');
+          const jpgZipPath = zipImagePath(task.baseName, 'jpg');
+
+          zip.file(pngZipPath, pngBytes);
+          zip.file(jpgZipPath, jpgBytes);
+
+          // Full paths for the JSON (basePath + zipFolder + image path)
+          allExportedFiles.push(
+            `${fullBasePath}/${pngZipPath}`,
+            `${fullBasePath}/${jpgZipPath}`
+          );
+        } catch (err: any) {
+          console.error(`Failed to export ${task.baseName}:`, err);
+        }
+      }
+    }
+
+    // Also patch imageFiles on nodes to use full paths
+    patchFullPaths(screens, fullBasePath);
+
+    // Phase 3: Build reusable components map
     const reusableComponents: Record<string, { name: string; usageCount: number; firstInstanceId: string }> = {};
     for (const [id, data] of componentUsageMap.entries()) {
       if (data.count >= 2) {
@@ -464,21 +649,45 @@ const screenToJson: Script = {
     const output: ScreenJSON = {
       exportedAt: new Date().toISOString(),
       figmaFileKey: fileKey,
+      exportPath: fullBasePath,
+      imageScale: IMAGE_SCALE,
+      imageFormats: ['png', 'jpeg'],
       screens,
       reusableComponents,
+      exportedImages: allExportedFiles,
     };
 
     const jsonString = JSON.stringify(output, null, 2);
 
-    // Send to UI for display/copy
+    // Add JSON to ZIP
+    zip.file('screen.json', jsonString);
+
+    // Phase 4: Generate ZIP and send to UI for single download
+    figma.notify('Packing ZIP...');
+    const zipBlob = await zip.generateAsync({ type: 'uint8array' });
+
+    // Send JSON to UI for preview/copy FIRST
     figma.ui.postMessage({
       type: 'json-output',
       json: jsonString,
       screenCount: screens.length,
       componentCount: Object.keys(reusableComponents).length,
+      imageCount: imageExportTasks.length,
     });
 
-    figma.notify(`Extracted ${screens.length} screen(s) with ${Object.keys(reusableComponents).length} reusable component(s).`);
+    // Send ZIP SECOND — so it overwrites the initial disabled state
+    figma.ui.postMessage({
+      type: 'download-zip',
+      bytes: Array.from(zipBlob),
+      zipFilename: `${zipFolderName}.zip`,
+      screenCount: screens.length,
+      componentCount: Object.keys(reusableComponents).length,
+      imageCount: imageExportTasks.length,
+    });
+
+    figma.notify(
+      `Done! ${screens.length} screen(s), ${Object.keys(reusableComponents).length} reusable component(s), ${imageExportTasks.length} image(s).`
+    );
   },
 };
 

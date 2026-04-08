@@ -21,26 +21,30 @@
     border-bottom: 1px solid #3a3a3a;
     background: #333;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
+  .header .settings-btn {
+    background: none;
+    border: none;
+    color: #999;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .header .settings-btn:hover { color: #fff; }
 
   /* ---- Views ---- */
   .view { display: none; flex-direction: column; flex: 1; overflow: hidden; }
   .view.active { display: flex; }
 
   /* ---- Script List ---- */
-  .script-list {
-    padding: 6px;
-    overflow-y: auto;
-    flex: 1;
-  }
+  .script-list { padding: 6px; overflow-y: auto; flex: 1; }
   .script-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background 0.15s;
+    display: flex; align-items: center; gap: 10px; padding: 10px;
+    border-radius: 6px; cursor: pointer; transition: background 0.15s;
   }
   .script-item:hover { background: #3a3a3a; }
   .script-item:active { background: #444; }
@@ -48,96 +52,81 @@
   .script-name { font-size: 12px; font-weight: 600; color: #fff; }
   .script-desc { font-size: 11px; color: #999; margin-top: 2px; }
   .script-icon {
-    width: 32px; height: 32px; border-radius: 6px;
-    background: #0d99ff;
+    width: 32px; height: 32px; border-radius: 6px; background: #0d99ff;
     display: flex; align-items: center; justify-content: center;
     font-size: 14px; flex-shrink: 0;
   }
-  .empty {
-    padding: 40px 14px;
-    text-align: center;
-    color: #666;
-    font-size: 12px;
+  .empty { padding: 40px 14px; text-align: center; color: #666; font-size: 12px; }
+
+  /* ---- Settings View ---- */
+  .settings-content { padding: 16px 14px; flex: 1; overflow-y: auto; }
+  .settings-label {
+    font-size: 11px; font-weight: 600; color: #ccc;
+    margin-bottom: 6px; display: block;
   }
+  .settings-hint {
+    font-size: 10px; color: #777; margin-bottom: 10px; line-height: 1.4;
+  }
+  .settings-input {
+    width: 100%; padding: 8px 10px; background: #1e1e1e; border: 1px solid #444;
+    border-radius: 4px; color: #e8e8e8; font-size: 12px; font-family: 'SF Mono', monospace;
+    outline: none;
+  }
+  .settings-input:focus { border-color: #0d99ff; }
+  .settings-current {
+    margin-top: 8px; padding: 8px 10px; background: #1a1a1a; border-radius: 4px;
+    font-size: 11px; color: #4ec9b0; font-family: 'SF Mono', monospace;
+    word-break: break-all;
+  }
+  .settings-actions { padding: 12px 14px; border-top: 1px solid #3a3a3a; display: flex; gap: 8px; }
+  .settings-actions .save-btn {
+    background: #0d99ff; border: none; color: #fff; padding: 6px 16px;
+    border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: inherit;
+  }
+  .settings-actions .save-btn:hover { background: #0b87e0; }
+  .settings-actions .cancel-btn {
+    background: none; border: 1px solid #555; color: #ccc; padding: 6px 16px;
+    border-radius: 4px; cursor: pointer; font-size: 11px; font-family: inherit;
+  }
+  .settings-actions .cancel-btn:hover { background: #444; }
 
   /* ---- JSON Output View ---- */
   .json-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-bottom: 1px solid #3a3a3a;
-    background: #333;
-    flex-shrink: 0;
+    display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+    border-bottom: 1px solid #3a3a3a; background: #333; flex-shrink: 0;
   }
   .json-toolbar .back-btn {
-    background: none;
-    border: 1px solid #555;
-    color: #ccc;
-    padding: 4px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 11px;
-    font-family: inherit;
+    background: none; border: 1px solid #555; color: #ccc; padding: 4px 10px;
+    border-radius: 4px; cursor: pointer; font-size: 11px; font-family: inherit;
   }
   .json-toolbar .back-btn:hover { background: #444; color: #fff; }
-  .json-stats {
-    flex: 1;
-    font-size: 11px;
-    color: #999;
-    text-align: center;
-  }
+  .json-stats { flex: 1; font-size: 11px; color: #999; text-align: center; }
   .json-toolbar .copy-btn {
-    background: #0d99ff;
-    border: none;
-    color: #fff;
-    padding: 5px 14px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 600;
-    font-family: inherit;
-    transition: background 0.15s;
+    background: #0d99ff; border: none; color: #fff; padding: 5px 14px;
+    border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;
+    font-family: inherit; transition: background 0.15s;
   }
   .json-toolbar .copy-btn:hover { background: #0b87e0; }
-  .json-toolbar .copy-btn.copied {
-    background: #4ec9b0;
+  .json-toolbar .copy-btn.copied { background: #4ec9b0; }
+  .json-toolbar .zip-btn {
+    background: #4ec9b0; border: none; color: #1e1e1e; padding: 5px 10px;
+    border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;
+    font-family: inherit; transition: background 0.15s;
   }
-  .json-toolbar .download-btn {
-    background: none;
-    border: 1px solid #555;
-    color: #ccc;
-    padding: 5px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 11px;
-    font-family: inherit;
-  }
-  .json-toolbar .download-btn:hover { background: #444; color: #fff; }
-  .json-output {
-    flex: 1;
-    overflow: auto;
-    padding: 10px 12px;
-    background: #1e1e1e;
-  }
+  .json-toolbar .zip-btn:hover { background: #3db89e; }
+  .json-toolbar .zip-btn:disabled { background: #555; color: #888; cursor: default; }
+  .json-output { flex: 1; overflow: auto; padding: 10px 12px; background: #1e1e1e; }
   .json-output pre {
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-    font-size: 11px;
-    line-height: 1.5;
-    color: #d4d4d4;
-    white-space: pre-wrap;
-    word-break: break-all;
+    font-size: 11px; line-height: 1.5; color: #d4d4d4;
+    white-space: pre-wrap; word-break: break-all;
   }
 
   /* ---- Status bar ---- */
   .status {
-    padding: 8px 14px;
-    font-size: 11px;
-    color: #4ec9b0;
-    border-top: 1px solid #3a3a3a;
-    background: #2a2a2a;
-    display: none;
-    flex-shrink: 0;
+    padding: 8px 14px; font-size: 11px; color: #4ec9b0;
+    border-top: 1px solid #3a3a3a; background: #2a2a2a;
+    display: none; flex-shrink: 0;
   }
   .status.visible { display: block; }
   .status.error { color: #f44747; }
@@ -147,17 +136,39 @@
 
 <!-- View: Script List -->
 <div class="view active" id="view-list">
-  <div class="header">My Toolkit</div>
+  <div class="header">
+    <span>My Toolkit</span>
+    <button class="settings-btn" id="settingsBtn" title="Export settings">&#9881;</button>
+  </div>
   <div class="script-list" id="list"></div>
+</div>
+
+<!-- View: Settings -->
+<div class="view" id="view-settings">
+  <div class="header"><span>Export Settings</span></div>
+  <div class="settings-content">
+    <label class="settings-label">Export Base Path</label>
+    <div class="settings-hint">
+      The folder where you save &amp; unzip exports.<br>
+      Example: ~/projects/figma/assets
+    </div>
+    <input class="settings-input" id="basePathInput" type="text"
+      placeholder="~/projects/figma/assets" spellcheck="false" />
+    <div class="settings-current" id="currentPath" style="display:none"></div>
+  </div>
+  <div class="settings-actions">
+    <button class="save-btn" id="savePathBtn">Save</button>
+    <button class="cancel-btn" id="cancelSettingsBtn">Cancel</button>
+  </div>
 </div>
 
 <!-- View: JSON Output -->
 <div class="view" id="view-json">
-  <div class="header">Screen to JSON</div>
+  <div class="header"><span>Screen to JSON</span></div>
   <div class="json-toolbar">
     <button class="back-btn" id="backBtn">Back</button>
     <span class="json-stats" id="jsonStats"></span>
-    <button class="download-btn" id="downloadBtn">Download</button>
+    <button class="zip-btn" id="zipBtn" disabled>Save ZIP</button>
     <button class="copy-btn" id="copyBtn">Copy JSON</button>
   </div>
   <div class="json-output" id="jsonOutput">
@@ -172,17 +183,27 @@ const list = document.getElementById('list');
 const status = document.getElementById('status');
 const viewList = document.getElementById('view-list');
 const viewJson = document.getElementById('view-json');
+const viewSettings = document.getElementById('view-settings');
 const jsonPre = document.getElementById('jsonPre');
 const jsonStats = document.getElementById('jsonStats');
 const copyBtn = document.getElementById('copyBtn');
-const downloadBtn = document.getElementById('downloadBtn');
+const zipBtn = document.getElementById('zipBtn');
 const backBtn = document.getElementById('backBtn');
+const settingsBtn = document.getElementById('settingsBtn');
+const basePathInput = document.getElementById('basePathInput');
+const currentPath = document.getElementById('currentPath');
+const savePathBtn = document.getElementById('savePathBtn');
+const cancelSettingsBtn = document.getElementById('cancelSettingsBtn');
 
 let currentJson = '';
+let currentZipBytes = null;
+let currentZipFilename = 'figma-export.zip';
+let savedBasePath = '';
 
 function showView(name) {
   viewList.className = 'view' + (name === 'list' ? ' active' : '');
   viewJson.className = 'view' + (name === 'json' ? ' active' : '');
+  viewSettings.className = 'view' + (name === 'settings' ? ' active' : '');
 }
 
 function showStatus(text, isError) {
@@ -192,7 +213,6 @@ function showStatus(text, isError) {
 }
 
 function syntaxHighlight(json) {
-  // Simple JSON syntax highlighting
   return json
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"([^"]+)"(?=\s*:)/g, '<span style="color:#9cdcfe">"$1"</span>')
@@ -225,7 +245,22 @@ function renderScripts(scripts) {
   });
 }
 
-// Copy to clipboard
+// Settings
+settingsBtn.addEventListener('click', () => {
+  basePathInput.value = savedBasePath;
+  showView('settings');
+});
+
+savePathBtn.addEventListener('click', () => {
+  const path = basePathInput.value.trim();
+  parent.postMessage({ pluginMessage: { type: 'save-base-path', path: path } }, '*');
+});
+
+cancelSettingsBtn.addEventListener('click', () => {
+  showView('list');
+});
+
+// Copy JSON to clipboard
 copyBtn.addEventListener('click', () => {
   if (!currentJson) return;
   const textarea = document.createElement('textarea');
@@ -242,14 +277,15 @@ copyBtn.addEventListener('click', () => {
   }, 2000);
 });
 
-// Download JSON file
-downloadBtn.addEventListener('click', () => {
-  if (!currentJson) return;
-  const blob = new Blob([currentJson], { type: 'application/json' });
+// Save ZIP
+zipBtn.addEventListener('click', () => {
+  if (!currentZipBytes) return;
+  const uint8 = new Uint8Array(currentZipBytes);
+  const blob = new Blob([uint8], { type: 'application/zip' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'figma-screen-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.download = currentZipFilename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -258,6 +294,11 @@ downloadBtn.addEventListener('click', () => {
 
 // Back button
 backBtn.addEventListener('click', () => {
+  currentJson = '';
+  currentZipBytes = null;
+  zipBtn.disabled = true;
+  zipBtn.textContent = 'Save ZIP';
+  jsonPre.innerHTML = '';
   showView('list');
 });
 
@@ -269,10 +310,48 @@ onmessage = (event) => {
   if (msg.type === 'done') showStatus('Done!', false);
   if (msg.type === 'error') showStatus('Error: ' + msg.message, true);
 
+  // Base path loaded from storage
+  if (msg.type === 'base-path') {
+    savedBasePath = msg.path || '';
+    if (savedBasePath) {
+      currentPath.textContent = savedBasePath;
+      currentPath.style.display = 'block';
+    }
+  }
+
+  // Base path saved
+  if (msg.type === 'base-path-saved') {
+    savedBasePath = msg.path;
+    currentPath.textContent = savedBasePath;
+    currentPath.style.display = savedBasePath ? 'block' : 'none';
+    showView('list');
+    showStatus('Path saved!', false);
+  }
+
+  // Show settings (triggered from backend when path is missing)
+  if (msg.type === 'show-settings') {
+    basePathInput.value = savedBasePath;
+    showView('settings');
+  }
+
+  // ZIP ready for download
+  if (msg.type === 'download-zip') {
+    currentZipBytes = msg.bytes;
+    currentZipFilename = msg.zipFilename || 'figma-export.zip';
+    zipBtn.disabled = false;
+    zipBtn.textContent = msg.imageCount > 0
+      ? 'Save ZIP (' + msg.imageCount + ' imgs)'
+      : 'Save ZIP';
+  }
+
+  // JSON preview
   if (msg.type === 'json-output') {
     currentJson = msg.json;
     jsonPre.innerHTML = syntaxHighlight(msg.json);
-    jsonStats.textContent = msg.screenCount + ' screen(s), ' + msg.componentCount + ' reusable component(s)';
+    const parts = [msg.screenCount + ' screen(s)'];
+    if (msg.componentCount > 0) parts.push(msg.componentCount + ' reusable');
+    if (msg.imageCount > 0) parts.push(msg.imageCount + ' image(s)');
+    jsonStats.textContent = parts.join(', ');
     showView('json');
   }
 };
