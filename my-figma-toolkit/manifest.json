@@ -7,11 +7,9 @@
   "editorType": ["figma"],
   "networkAccess": {
     "allowedDomains": [
-      "https://generativelanguage.googleapis.com"
+      "https://generativelanguage.googleapis.com",
+      "http://localhost:11434"
     ],
-    "devAllowedDomains": [
-      "http://localhost"
-    ],
-    "reasoning": "AI enrichment: Ollama (local) and Gemini (cloud) for semantic analysis of screen exports."
+    "reasoning": "AI enrichment: Ollama (localhost) for local inference and Gemini (cloud) for semantic analysis of screen exports."
   }
 }
