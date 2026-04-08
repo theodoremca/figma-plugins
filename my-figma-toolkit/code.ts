@@ -4,12 +4,14 @@ if (typeof setImmediate === 'undefined') {
 }
 
 import { scripts } from './scripts';
+import { AI_SETTINGS_KEY, DEFAULT_AI_SETTINGS, fetchOllamaModels } from './scripts/ai-enrich';
+import type { AISettings } from './scripts/ai-enrich';
 
 const BASE_PATH_KEY = 'screen-to-json-base-path';
 
-figma.showUI(__html__, { width: 400, height: 500 });
+figma.showUI(__html__, { width: 400, height: 560 });
 
-// Send the script list + saved base path to the UI on launch
+// Send the script list + saved settings to the UI on launch
 async function init() {
   const scriptList = scripts.map(s => ({
     id: s.id,
@@ -18,14 +20,18 @@ async function init() {
   }));
   figma.ui.postMessage({ type: 'script-list', scripts: scriptList });
 
-  // Send saved base path to UI
+  // Send saved base path
   const savedPath = await figma.clientStorage.getAsync(BASE_PATH_KEY) || '';
   figma.ui.postMessage({ type: 'base-path', path: savedPath });
+
+  // Send saved AI settings
+  const aiSettings: AISettings = await figma.clientStorage.getAsync(AI_SETTINGS_KEY) || DEFAULT_AI_SETTINGS;
+  figma.ui.postMessage({ type: 'ai-settings', settings: aiSettings });
 }
 init();
 
 // Handle messages from UI
-figma.ui.onmessage = (msg: { type: string; scriptId?: string; path?: string }) => {
+figma.ui.onmessage = (msg: { type: string; scriptId?: string; path?: string; settings?: AISettings }) => {
   // Script execution
   if (msg.type === 'run-script' && msg.scriptId) {
     const script = scripts.find(s => s.id === msg.scriptId);
@@ -46,6 +52,22 @@ figma.ui.onmessage = (msg: { type: string; scriptId?: string; path?: string }) =
     figma.clientStorage.setAsync(BASE_PATH_KEY, msg.path).then(() => {
       figma.notify('Export path saved: ' + msg.path);
       figma.ui.postMessage({ type: 'base-path-saved', path: msg.path });
+    });
+  }
+
+  // Save AI settings
+  if (msg.type === 'save-ai-settings' && msg.settings) {
+    figma.clientStorage.setAsync(AI_SETTINGS_KEY, msg.settings).then(() => {
+      figma.notify('AI settings saved');
+      figma.ui.postMessage({ type: 'ai-settings-saved', settings: msg.settings });
+    });
+  }
+
+  // Fetch Ollama models
+  if (msg.type === 'fetch-ollama-models') {
+    const url = (msg as any).url || 'http://localhost:11434';
+    fetchOllamaModels(url).then(models => {
+      figma.ui.postMessage({ type: 'ollama-models', models });
     });
   }
 };

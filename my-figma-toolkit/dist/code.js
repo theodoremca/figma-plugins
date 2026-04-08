@@ -2585,6 +2585,180 @@
 
   // scripts/screen-to-json.ts
   var import_jszip = __toESM(require_jszip_min());
+
+  // scripts/ai-enrich.ts
+  var DEFAULT_AI_SETTINGS = {
+    enabled: false,
+    provider: "ollama",
+    ollamaModel: "qwen2.5-coder:14b",
+    ollamaUrl: "http://localhost:11434",
+    geminiApiKey: "",
+    geminiModel: "gemini-2.0-flash"
+  };
+  var AI_SETTINGS_KEY = "screen-to-json-ai-settings";
+  var SYSTEM_PROMPT = `You are a UI design analyzer. You receive a JSON representation of Figma screens and return structured analysis.
+
+Your job is to add SEMANTIC CONTEXT that helps a code assistant (Claude Code) understand what things ARE, not just how they look.
+
+Rules:
+- Be concise. Summaries are 1-2 sentences max.
+- Semantic roles should be lowercase-kebab-case (e.g., "navigation-bar", "search-input", "avatar-image", "call-to-action-button")
+- Only tag nodes with generic names (Frame, Group, Rectangle, Vector, Ellipse, etc.). Skip nodes that already have meaningful names.
+- For flow descriptions, describe the user journey in one short paragraph.
+- Return ONLY valid JSON matching the exact schema below. No markdown, no explanation.
+
+Response schema:
+{
+  "screenSummaries": { "<screen-id>": "<summary>" },
+  "semanticRoles": { "<node-id>": "<role>" },
+  "flowDescription": "<optional: multi-screen flow>",
+  "sharedComponents": [{ "name": "<component-name>", "description": "<what-it-is>", "foundInScreens": ["<screen-name>"] }]
+}`;
+  function buildUserPrompt(screensJson) {
+    const trimmed = trimForAI(screensJson, 0, 3);
+    return `Analyze these Figma screens and return the enrichment JSON:
+
+${JSON.stringify(trimmed, null, 2)}`;
+  }
+  function trimForAI(obj, depth, maxDepth) {
+    if (Array.isArray(obj)) {
+      return obj.map((item) => trimForAI(item, depth, maxDepth));
+    }
+    if (obj && typeof obj === "object") {
+      const result = {};
+      for (const [key, value] of Object.entries(obj)) {
+        if (key === "children" && depth >= maxDepth) {
+          const children = value;
+          if (children && children.length > 0) {
+            result._childCount = children.length;
+            result._childTypes = [...new Set(children.map((c) => c.type))];
+          }
+          continue;
+        }
+        if (key === "imageRef" || key === "gradientTransform") continue;
+        if (key === "children") {
+          result[key] = trimForAI(value, depth + 1, maxDepth);
+        } else {
+          result[key] = value;
+        }
+      }
+      return result;
+    }
+    return obj;
+  }
+  async function ollamaGenerate(prompt, settings) {
+    const url = `${settings.ollamaUrl}/api/generate`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: settings.ollamaModel,
+        prompt,
+        system: SYSTEM_PROMPT,
+        stream: false,
+        format: "json",
+        options: {
+          temperature: 0.3,
+          num_ctx: 8192
+        }
+      })
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Ollama error ${response.status}: ${text}`);
+    }
+    const data = await response.json();
+    return data.response;
+  }
+  async function geminiGenerate(prompt, settings) {
+    var _a, _b, _c, _d;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent?key=${settings.geminiApiKey}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: SYSTEM_PROMPT + "\n\n" + prompt }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.3,
+          responseMimeType: "application/json"
+        }
+      })
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Gemini error ${response.status}: ${text}`);
+    }
+    const data = await response.json();
+    const candidate = (_a = data.candidates) == null ? void 0 : _a[0];
+    if (!((_d = (_c = (_b = candidate == null ? void 0 : candidate.content) == null ? void 0 : _b.parts) == null ? void 0 : _c[0]) == null ? void 0 : _d.text)) {
+      throw new Error("No response from Gemini");
+    }
+    return candidate.content.parts[0].text;
+  }
+  async function enrichScreenJSON(screenData, settings) {
+    try {
+      const userPrompt = buildUserPrompt({
+        screens: screenData.screens,
+        reusableComponents: screenData.reusableComponents
+      });
+      let rawResponse;
+      if (settings.provider === "ollama") {
+        rawResponse = await ollamaGenerate(userPrompt, settings);
+      } else {
+        rawResponse = await geminiGenerate(userPrompt, settings);
+      }
+      const enrichment = JSON.parse(rawResponse);
+      if (!enrichment.screenSummaries || typeof enrichment.screenSummaries !== "object") {
+        enrichment.screenSummaries = {};
+      }
+      if (!enrichment.semanticRoles || typeof enrichment.semanticRoles !== "object") {
+        enrichment.semanticRoles = {};
+      }
+      return enrichment;
+    } catch (err) {
+      console.error("AI enrichment failed:", err);
+      figma.notify("AI enrichment failed: " + (err.message || String(err)), { timeout: 5e3 });
+      return null;
+    }
+  }
+  function applyEnrichment(screens, enrichment) {
+    for (const screen of screens) {
+      if (enrichment.screenSummaries[screen.id]) {
+        screen.summary = enrichment.screenSummaries[screen.id];
+      }
+    }
+    function tagRoles(node) {
+      if (enrichment.semanticRoles[node.id]) {
+        node.semanticRole = enrichment.semanticRoles[node.id];
+      }
+      if (node.children) {
+        for (const child of node.children) {
+          tagRoles(child);
+        }
+      }
+    }
+    for (const screen of screens) {
+      tagRoles(screen);
+    }
+  }
+  async function fetchOllamaModels(ollamaUrl) {
+    try {
+      const response = await fetch(`${ollamaUrl}/api/tags`);
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.models || []).map((m) => m.name);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // scripts/screen-to-json.ts
   var IMAGE_SCALE = 1.5;
   var IMAGES_FOLDER = "images";
   var CLIENT_STORAGE_KEY = "screen-to-json-base-path";
@@ -2964,12 +3138,33 @@
           };
         }
       }
+      const aiSettings = await figma.clientStorage.getAsync(AI_SETTINGS_KEY) || DEFAULT_AI_SETTINGS;
+      let aiEnriched = false;
+      let flowDescription;
+      let sharedComponents;
+      if (aiSettings.enabled) {
+        figma.notify(`Analyzing with AI (${aiSettings.provider})...`);
+        figma.ui.postMessage({ type: "ai-status", status: "running" });
+        const enrichment = await enrichScreenJSON({ screens, reusableComponents }, aiSettings);
+        if (enrichment) {
+          aiEnriched = true;
+          applyEnrichment(screens, enrichment);
+          flowDescription = enrichment.flowDescription;
+          sharedComponents = enrichment.sharedComponents;
+          figma.ui.postMessage({ type: "ai-status", status: "done" });
+        } else {
+          figma.ui.postMessage({ type: "ai-status", status: "failed" });
+        }
+      }
       const output = {
         exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
         figmaFileKey: fileKey,
         exportPath: fullBasePath,
         imageScale: IMAGE_SCALE,
         imageFormats: ["png", "jpeg"],
+        aiEnriched,
+        flowDescription,
+        sharedComponents,
         screens,
         reusableComponents,
         exportedImages: allExportedFiles
@@ -3015,7 +3210,7 @@
     globalThis.setImmediate = (fn, ...args) => setTimeout(fn, 0, ...args);
   }
   var BASE_PATH_KEY = "screen-to-json-base-path";
-  figma.showUI(__html__, { width: 400, height: 500 });
+  figma.showUI(__html__, { width: 400, height: 560 });
   async function init() {
     const scriptList = scripts.map((s) => ({
       id: s.id,
@@ -3025,6 +3220,8 @@
     figma.ui.postMessage({ type: "script-list", scripts: scriptList });
     const savedPath = await figma.clientStorage.getAsync(BASE_PATH_KEY) || "";
     figma.ui.postMessage({ type: "base-path", path: savedPath });
+    const aiSettings = await figma.clientStorage.getAsync(AI_SETTINGS_KEY) || DEFAULT_AI_SETTINGS;
+    figma.ui.postMessage({ type: "ai-settings", settings: aiSettings });
   }
   init();
   figma.ui.onmessage = (msg) => {
@@ -3043,6 +3240,18 @@
       figma.clientStorage.setAsync(BASE_PATH_KEY, msg.path).then(() => {
         figma.notify("Export path saved: " + msg.path);
         figma.ui.postMessage({ type: "base-path-saved", path: msg.path });
+      });
+    }
+    if (msg.type === "save-ai-settings" && msg.settings) {
+      figma.clientStorage.setAsync(AI_SETTINGS_KEY, msg.settings).then(() => {
+        figma.notify("AI settings saved");
+        figma.ui.postMessage({ type: "ai-settings-saved", settings: msg.settings });
+      });
+    }
+    if (msg.type === "fetch-ollama-models") {
+      const url = msg.url || "http://localhost:11434";
+      fetchOllamaModels(url).then((models) => {
+        figma.ui.postMessage({ type: "ollama-models", models });
       });
     }
   };

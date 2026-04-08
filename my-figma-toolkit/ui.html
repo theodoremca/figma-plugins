@@ -26,21 +26,15 @@
     justify-content: space-between;
   }
   .header .settings-btn {
-    background: none;
-    border: none;
-    color: #999;
-    cursor: pointer;
-    font-size: 16px;
-    padding: 0 4px;
-    line-height: 1;
+    background: none; border: none; color: #999;
+    cursor: pointer; font-size: 16px; padding: 0 4px; line-height: 1;
   }
   .header .settings-btn:hover { color: #fff; }
 
-  /* ---- Views ---- */
   .view { display: none; flex-direction: column; flex: 1; overflow: hidden; }
   .view.active { display: flex; }
 
-  /* ---- Script List ---- */
+  /* Script List */
   .script-list { padding: 6px; overflow-y: auto; flex: 1; }
   .script-item {
     display: flex; align-items: center; gap: 10px; padding: 10px;
@@ -58,39 +52,55 @@
   }
   .empty { padding: 40px 14px; text-align: center; color: #666; font-size: 12px; }
 
-  /* ---- Settings View ---- */
-  .settings-content { padding: 16px 14px; flex: 1; overflow-y: auto; }
-  .settings-label {
-    font-size: 11px; font-weight: 600; color: #ccc;
-    margin-bottom: 6px; display: block;
+  /* Settings */
+  .settings-content { padding: 14px; flex: 1; overflow-y: auto; }
+  .settings-section { margin-bottom: 16px; }
+  .settings-section-title {
+    font-size: 11px; font-weight: 700; color: #0d99ff; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 8px;
   }
-  .settings-hint {
-    font-size: 10px; color: #777; margin-bottom: 10px; line-height: 1.4;
-  }
-  .settings-input {
-    width: 100%; padding: 8px 10px; background: #1e1e1e; border: 1px solid #444;
+  .settings-label { font-size: 11px; font-weight: 600; color: #ccc; margin-bottom: 4px; display: block; }
+  .settings-hint { font-size: 10px; color: #777; margin-bottom: 8px; line-height: 1.4; }
+  .settings-input, .settings-select {
+    width: 100%; padding: 7px 10px; background: #1e1e1e; border: 1px solid #444;
     border-radius: 4px; color: #e8e8e8; font-size: 12px; font-family: 'SF Mono', monospace;
-    outline: none;
+    outline: none; margin-bottom: 8px;
   }
-  .settings-input:focus { border-color: #0d99ff; }
+  .settings-input:focus, .settings-select:focus { border-color: #0d99ff; }
+  .settings-select { font-family: inherit; cursor: pointer; -webkit-appearance: none; appearance: none; }
   .settings-current {
-    margin-top: 8px; padding: 8px 10px; background: #1a1a1a; border-radius: 4px;
+    margin-top: 4px; padding: 6px 10px; background: #1a1a1a; border-radius: 4px;
     font-size: 11px; color: #4ec9b0; font-family: 'SF Mono', monospace;
-    word-break: break-all;
+    word-break: break-all; margin-bottom: 8px;
   }
-  .settings-actions { padding: 12px 14px; border-top: 1px solid #3a3a3a; display: flex; gap: 8px; }
-  .settings-actions .save-btn {
+  .settings-toggle {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer;
+  }
+  .settings-toggle input { cursor: pointer; }
+  .settings-toggle span { font-size: 12px; color: #ccc; }
+  .provider-section { display: none; }
+  .provider-section.active { display: block; }
+  .fetch-btn {
+    background: #444; border: 1px solid #555; color: #ccc; padding: 4px 10px;
+    border-radius: 4px; cursor: pointer; font-size: 10px; font-family: inherit;
+    margin-left: 8px;
+  }
+  .fetch-btn:hover { background: #555; color: #fff; }
+  .settings-actions {
+    padding: 10px 14px; border-top: 1px solid #3a3a3a; display: flex; gap: 8px;
+  }
+  .save-btn {
     background: #0d99ff; border: none; color: #fff; padding: 6px 16px;
     border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: inherit;
   }
-  .settings-actions .save-btn:hover { background: #0b87e0; }
-  .settings-actions .cancel-btn {
+  .save-btn:hover { background: #0b87e0; }
+  .cancel-btn {
     background: none; border: 1px solid #555; color: #ccc; padding: 6px 16px;
     border-radius: 4px; cursor: pointer; font-size: 11px; font-family: inherit;
   }
-  .settings-actions .cancel-btn:hover { background: #444; }
+  .cancel-btn:hover { background: #444; }
 
-  /* ---- JSON Output View ---- */
+  /* JSON Output */
   .json-toolbar {
     display: flex; align-items: center; gap: 6px; padding: 8px 12px;
     border-bottom: 1px solid #3a3a3a; background: #333; flex-shrink: 0;
@@ -115,6 +125,10 @@
   }
   .json-toolbar .zip-btn:hover { background: #3db89e; }
   .json-toolbar .zip-btn:disabled { background: #555; color: #888; cursor: default; }
+  .ai-badge {
+    background: #9333ea; color: #fff; font-size: 9px; font-weight: 700;
+    padding: 2px 6px; border-radius: 3px; text-transform: uppercase;
+  }
   .json-output { flex: 1; overflow: auto; padding: 10px 12px; background: #1e1e1e; }
   .json-output pre {
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
@@ -122,7 +136,7 @@
     white-space: pre-wrap; word-break: break-all;
   }
 
-  /* ---- Status bar ---- */
+  /* Status */
   .status {
     padding: 8px 14px; font-size: 11px; color: #4ec9b0;
     border-top: 1px solid #3a3a3a; background: #2a2a2a;
@@ -130,6 +144,7 @@
   }
   .status.visible { display: block; }
   .status.error { color: #f44747; }
+  .status.ai { color: #9333ea; }
 </style>
 </head>
 <body>
@@ -138,33 +153,84 @@
 <div class="view active" id="view-list">
   <div class="header">
     <span>My Toolkit</span>
-    <button class="settings-btn" id="settingsBtn" title="Export settings">&#9881;</button>
+    <button class="settings-btn" id="settingsBtn" title="Settings">&#9881;</button>
   </div>
   <div class="script-list" id="list"></div>
 </div>
 
 <!-- View: Settings -->
 <div class="view" id="view-settings">
-  <div class="header"><span>Export Settings</span></div>
+  <div class="header"><span>Settings</span></div>
   <div class="settings-content">
-    <label class="settings-label">Export Base Path</label>
-    <div class="settings-hint">
-      The folder where you save &amp; unzip exports.<br>
-      Example: ~/projects/figma/assets
+
+    <!-- Export Path -->
+    <div class="settings-section">
+      <div class="settings-section-title">Export Path</div>
+      <label class="settings-label">Base folder for exports</label>
+      <input class="settings-input" id="basePathInput" type="text"
+        placeholder="~/projects/figma/assets" spellcheck="false" />
+      <div class="settings-current" id="currentPath" style="display:none"></div>
     </div>
-    <input class="settings-input" id="basePathInput" type="text"
-      placeholder="~/projects/figma/assets" spellcheck="false" />
-    <div class="settings-current" id="currentPath" style="display:none"></div>
+
+    <!-- AI Enrichment -->
+    <div class="settings-section">
+      <div class="settings-section-title">AI Enrichment</div>
+      <label class="settings-toggle">
+        <input type="checkbox" id="aiEnabledToggle" />
+        <span>Enable AI analysis (adds summaries &amp; semantic roles)</span>
+      </label>
+
+      <div id="aiOptions" style="display:none">
+        <label class="settings-label">Provider</label>
+        <select class="settings-select" id="aiProviderSelect">
+          <option value="ollama">Ollama (local)</option>
+          <option value="gemini">Gemini (cloud)</option>
+        </select>
+
+        <!-- Ollama settings -->
+        <div class="provider-section active" id="ollamaSettings">
+          <label class="settings-label">
+            Ollama URL
+          </label>
+          <input class="settings-input" id="ollamaUrlInput" type="text"
+            value="http://localhost:11434" spellcheck="false" />
+          <label class="settings-label">
+            Model
+            <button class="fetch-btn" id="fetchModelsBtn">Refresh</button>
+          </label>
+          <select class="settings-select" id="ollamaModelSelect">
+            <option value="qwen2.5-coder:14b">qwen2.5-coder:14b</option>
+          </select>
+        </div>
+
+        <!-- Gemini settings -->
+        <div class="provider-section" id="geminiSettings">
+          <label class="settings-label">API Key</label>
+          <input class="settings-input" id="geminiKeyInput" type="password"
+            placeholder="AIza..." spellcheck="false" />
+          <label class="settings-label">Model</label>
+          <select class="settings-select" id="geminiModelSelect">
+            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+            <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</option>
+            <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+          </select>
+        </div>
+      </div>
+    </div>
   </div>
+
   <div class="settings-actions">
-    <button class="save-btn" id="savePathBtn">Save</button>
+    <button class="save-btn" id="saveSettingsBtn">Save All</button>
     <button class="cancel-btn" id="cancelSettingsBtn">Cancel</button>
   </div>
 </div>
 
 <!-- View: JSON Output -->
 <div class="view" id="view-json">
-  <div class="header"><span>Screen to JSON</span></div>
+  <div class="header">
+    <span>Screen to JSON</span>
+    <span class="ai-badge" id="aiBadge" style="display:none">AI Enriched</span>
+  </div>
   <div class="json-toolbar">
     <button class="back-btn" id="backBtn">Back</button>
     <span class="json-stats" id="jsonStats"></span>
@@ -179,6 +245,7 @@
 <div class="status" id="status"></div>
 
 <script>
+// ---- DOM refs ----
 const list = document.getElementById('list');
 const status = document.getElementById('status');
 const viewList = document.getElementById('view-list');
@@ -190,26 +257,53 @@ const copyBtn = document.getElementById('copyBtn');
 const zipBtn = document.getElementById('zipBtn');
 const backBtn = document.getElementById('backBtn');
 const settingsBtn = document.getElementById('settingsBtn');
+const aiBadge = document.getElementById('aiBadge');
+
+// Settings refs
 const basePathInput = document.getElementById('basePathInput');
 const currentPath = document.getElementById('currentPath');
-const savePathBtn = document.getElementById('savePathBtn');
+const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 const cancelSettingsBtn = document.getElementById('cancelSettingsBtn');
+const aiEnabledToggle = document.getElementById('aiEnabledToggle');
+const aiOptions = document.getElementById('aiOptions');
+const aiProviderSelect = document.getElementById('aiProviderSelect');
+const ollamaSettings = document.getElementById('ollamaSettings');
+const geminiSettings = document.getElementById('geminiSettings');
+const ollamaUrlInput = document.getElementById('ollamaUrlInput');
+const ollamaModelSelect = document.getElementById('ollamaModelSelect');
+const fetchModelsBtn = document.getElementById('fetchModelsBtn');
+const geminiKeyInput = document.getElementById('geminiKeyInput');
+const geminiModelSelect = document.getElementById('geminiModelSelect');
 
+// ---- State ----
 let currentJson = '';
 let currentZipBytes = null;
 let currentZipFilename = 'figma-export.zip';
 let savedBasePath = '';
+let savedAiSettings = {
+  enabled: false,
+  provider: 'ollama',
+  ollamaModel: 'qwen2.5-coder:14b',
+  ollamaUrl: 'http://localhost:11434',
+  geminiApiKey: '',
+  geminiModel: 'gemini-2.0-flash',
+};
 
+// ---- Helpers ----
 function showView(name) {
   viewList.className = 'view' + (name === 'list' ? ' active' : '');
   viewJson.className = 'view' + (name === 'json' ? ' active' : '');
   viewSettings.className = 'view' + (name === 'settings' ? ' active' : '');
 }
 
-function showStatus(text, isError) {
+function showStatus(text, isError, isAi) {
   status.textContent = text;
-  status.className = 'status visible' + (isError ? ' error' : '');
-  setTimeout(() => { status.className = 'status'; }, 3000);
+  status.className = 'status visible' + (isError ? ' error' : '') + (isAi ? ' ai' : '');
+  if (!isAi) setTimeout(() => { status.className = 'status'; }, 3000);
+}
+
+function clearStatus() {
+  status.className = 'status';
 }
 
 function syntaxHighlight(json) {
@@ -245,22 +339,62 @@ function renderScripts(scripts) {
   });
 }
 
-// Settings
-settingsBtn.addEventListener('click', () => {
+// ---- Settings UI logic ----
+function loadSettingsUI() {
   basePathInput.value = savedBasePath;
+  aiEnabledToggle.checked = savedAiSettings.enabled;
+  aiOptions.style.display = savedAiSettings.enabled ? 'block' : 'none';
+  aiProviderSelect.value = savedAiSettings.provider;
+  ollamaUrlInput.value = savedAiSettings.ollamaUrl;
+  geminiKeyInput.value = savedAiSettings.geminiApiKey;
+  geminiModelSelect.value = savedAiSettings.geminiModel;
+  updateProviderUI();
+}
+
+function updateProviderUI() {
+  const isOllama = aiProviderSelect.value === 'ollama';
+  ollamaSettings.className = 'provider-section' + (isOllama ? ' active' : '');
+  geminiSettings.className = 'provider-section' + (!isOllama ? ' active' : '');
+}
+
+aiEnabledToggle.addEventListener('change', () => {
+  aiOptions.style.display = aiEnabledToggle.checked ? 'block' : 'none';
+});
+
+aiProviderSelect.addEventListener('change', updateProviderUI);
+
+fetchModelsBtn.addEventListener('click', () => {
+  fetchModelsBtn.textContent = '...';
+  parent.postMessage({
+    pluginMessage: { type: 'fetch-ollama-models', url: ollamaUrlInput.value.trim() }
+  }, '*');
+});
+
+settingsBtn.addEventListener('click', () => {
+  loadSettingsUI();
   showView('settings');
 });
 
-savePathBtn.addEventListener('click', () => {
+saveSettingsBtn.addEventListener('click', () => {
+  // Save base path
   const path = basePathInput.value.trim();
-  parent.postMessage({ pluginMessage: { type: 'save-base-path', path: path } }, '*');
+  parent.postMessage({ pluginMessage: { type: 'save-base-path', path } }, '*');
+
+  // Save AI settings
+  const settings = {
+    enabled: aiEnabledToggle.checked,
+    provider: aiProviderSelect.value,
+    ollamaModel: ollamaModelSelect.value,
+    ollamaUrl: ollamaUrlInput.value.trim(),
+    geminiApiKey: geminiKeyInput.value.trim(),
+    geminiModel: geminiModelSelect.value,
+  };
+  parent.postMessage({ pluginMessage: { type: 'save-ai-settings', settings } }, '*');
 });
 
-cancelSettingsBtn.addEventListener('click', () => {
-  showView('list');
-});
+cancelSettingsBtn.addEventListener('click', () => showView('list'));
 
-// Copy JSON to clipboard
+// ---- Copy / ZIP / Back ----
 copyBtn.addEventListener('click', () => {
   if (!currentJson) return;
   const textarea = document.createElement('textarea');
@@ -271,13 +405,9 @@ copyBtn.addEventListener('click', () => {
   document.body.removeChild(textarea);
   copyBtn.textContent = 'Copied!';
   copyBtn.classList.add('copied');
-  setTimeout(() => {
-    copyBtn.textContent = 'Copy JSON';
-    copyBtn.classList.remove('copied');
-  }, 2000);
+  setTimeout(() => { copyBtn.textContent = 'Copy JSON'; copyBtn.classList.remove('copied'); }, 2000);
 });
 
-// Save ZIP
 zipBtn.addEventListener('click', () => {
   if (!currentZipBytes) return;
   const uint8 = new Uint8Array(currentZipBytes);
@@ -292,25 +422,27 @@ zipBtn.addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-// Back button
 backBtn.addEventListener('click', () => {
   currentJson = '';
   currentZipBytes = null;
   zipBtn.disabled = true;
   zipBtn.textContent = 'Save ZIP';
+  aiBadge.style.display = 'none';
   jsonPre.innerHTML = '';
+  clearStatus();
   showView('list');
 });
 
+// ---- Message handler ----
 onmessage = (event) => {
   const msg = event.data.pluginMessage;
   if (!msg) return;
 
   if (msg.type === 'script-list') renderScripts(msg.scripts);
-  if (msg.type === 'done') showStatus('Done!', false);
-  if (msg.type === 'error') showStatus('Error: ' + msg.message, true);
+  if (msg.type === 'done') showStatus('Done!', false, false);
+  if (msg.type === 'error') showStatus('Error: ' + msg.message, true, false);
 
-  // Base path loaded from storage
+  // Settings loaded from storage
   if (msg.type === 'base-path') {
     savedBasePath = msg.path || '';
     if (savedBasePath) {
@@ -319,29 +451,61 @@ onmessage = (event) => {
     }
   }
 
-  // Base path saved
+  if (msg.type === 'ai-settings') {
+    savedAiSettings = msg.settings || savedAiSettings;
+  }
+
   if (msg.type === 'base-path-saved') {
     savedBasePath = msg.path;
     currentPath.textContent = savedBasePath;
     currentPath.style.display = savedBasePath ? 'block' : 'none';
-    showView('list');
-    showStatus('Path saved!', false);
   }
 
-  // Show settings (triggered from backend when path is missing)
+  if (msg.type === 'ai-settings-saved') {
+    savedAiSettings = msg.settings;
+    showView('list');
+    showStatus('Settings saved!', false, false);
+  }
+
   if (msg.type === 'show-settings') {
-    basePathInput.value = savedBasePath;
+    loadSettingsUI();
     showView('settings');
   }
 
-  // ZIP ready for download
+  // Ollama models fetched
+  if (msg.type === 'ollama-models') {
+    fetchModelsBtn.textContent = 'Refresh';
+    const models = msg.models || [];
+    ollamaModelSelect.innerHTML = '';
+    if (models.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No models found';
+      ollamaModelSelect.appendChild(opt);
+    } else {
+      models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        if (m === savedAiSettings.ollamaModel) opt.selected = true;
+        ollamaModelSelect.appendChild(opt);
+      });
+    }
+  }
+
+  // AI status updates
+  if (msg.type === 'ai-status') {
+    if (msg.status === 'running') showStatus('Analyzing with AI...', false, true);
+    if (msg.status === 'done') clearStatus();
+    if (msg.status === 'failed') showStatus('AI enrichment failed (exported without AI)', true, false);
+  }
+
+  // ZIP ready
   if (msg.type === 'download-zip') {
     currentZipBytes = msg.bytes;
     currentZipFilename = msg.zipFilename || 'figma-export.zip';
     zipBtn.disabled = false;
-    zipBtn.textContent = msg.imageCount > 0
-      ? 'Save ZIP (' + msg.imageCount + ' imgs)'
-      : 'Save ZIP';
+    zipBtn.textContent = msg.imageCount > 0 ? 'Save ZIP (' + msg.imageCount + ' imgs)' : 'Save ZIP';
   }
 
   // JSON preview
@@ -352,6 +516,13 @@ onmessage = (event) => {
     if (msg.componentCount > 0) parts.push(msg.componentCount + ' reusable');
     if (msg.imageCount > 0) parts.push(msg.imageCount + ' image(s)');
     jsonStats.textContent = parts.join(', ');
+
+    // Show AI badge if enriched
+    try {
+      const parsed = JSON.parse(msg.json);
+      aiBadge.style.display = parsed.aiEnriched ? 'inline' : 'none';
+    } catch { aiBadge.style.display = 'none'; }
+
     showView('json');
   }
 };

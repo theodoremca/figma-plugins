@@ -1,5 +1,7 @@
 import { Script } from './types';
 import JSZip from 'jszip';
+import { enrichScreenJSON, applyEnrichment, AI_SETTINGS_KEY, DEFAULT_AI_SETTINGS } from './ai-enrich';
+import type { AISettings } from './ai-enrich';
 
 // ============================================================
 // Screen to JSON — Extracts a detailed JSON blueprint from
@@ -86,6 +88,10 @@ interface NodeJSON {
   textCase?: string;
   paragraphSpacing?: number;
 
+  // AI enrichment (optional)
+  summary?: string;
+  semanticRole?: string;
+
   // Image — paths relative to the ZIP root
   imageRef?: string;
   imageFiles?: { png: string; jpeg: string };
@@ -134,6 +140,9 @@ interface ScreenJSON {
   exportPath: string;
   imageScale: number;
   imageFormats: string[];
+  aiEnriched: boolean;
+  flowDescription?: string;
+  sharedComponents?: Array<{ name: string; description: string; foundInScreens: string[] }>;
   screens: NodeJSON[];
   reusableComponents: Record<string, { name: string; usageCount: number; firstInstanceId: string }>;
   exportedImages: string[];
@@ -646,12 +655,38 @@ const screenToJson: Script = {
       }
     }
 
+    // Phase 3.5: Optional AI enrichment
+    const aiSettings: AISettings = await figma.clientStorage.getAsync(AI_SETTINGS_KEY) || DEFAULT_AI_SETTINGS;
+    let aiEnriched = false;
+    let flowDescription: string | undefined;
+    let sharedComponents: Array<{ name: string; description: string; foundInScreens: string[] }> | undefined;
+
+    if (aiSettings.enabled) {
+      figma.notify(`Analyzing with AI (${aiSettings.provider})...`);
+      figma.ui.postMessage({ type: 'ai-status', status: 'running' });
+
+      const enrichment = await enrichScreenJSON({ screens, reusableComponents }, aiSettings);
+
+      if (enrichment) {
+        aiEnriched = true;
+        applyEnrichment(screens, enrichment);
+        flowDescription = enrichment.flowDescription;
+        sharedComponents = enrichment.sharedComponents;
+        figma.ui.postMessage({ type: 'ai-status', status: 'done' });
+      } else {
+        figma.ui.postMessage({ type: 'ai-status', status: 'failed' });
+      }
+    }
+
     const output: ScreenJSON = {
       exportedAt: new Date().toISOString(),
       figmaFileKey: fileKey,
       exportPath: fullBasePath,
       imageScale: IMAGE_SCALE,
       imageFormats: ['png', 'jpeg'],
+      aiEnriched,
+      flowDescription,
+      sharedComponents,
       screens,
       reusableComponents,
       exportedImages: allExportedFiles,
