@@ -8,6 +8,10 @@
     font-size: 12px;
     color: #e8e8e8;
     background: #2c2c2c;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
   }
   .header {
     padding: 12px 14px 8px;
@@ -16,9 +20,18 @@
     color: #fff;
     border-bottom: 1px solid #3a3a3a;
     background: #333;
+    flex-shrink: 0;
   }
+
+  /* ---- Views ---- */
+  .view { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+  .view.active { display: flex; }
+
+  /* ---- Script List ---- */
   .script-list {
     padding: 6px;
+    overflow-y: auto;
+    flex: 1;
   }
   .script-item {
     display: flex;
@@ -29,36 +42,16 @@
     cursor: pointer;
     transition: background 0.15s;
   }
-  .script-item:hover {
-    background: #3a3a3a;
-  }
-  .script-item:active {
-    background: #444;
-  }
-  .script-info {
-    flex: 1;
-    min-width: 0;
-  }
-  .script-name {
-    font-size: 12px;
-    font-weight: 600;
-    color: #fff;
-  }
-  .script-desc {
-    font-size: 11px;
-    color: #999;
-    margin-top: 2px;
-  }
+  .script-item:hover { background: #3a3a3a; }
+  .script-item:active { background: #444; }
+  .script-info { flex: 1; min-width: 0; }
+  .script-name { font-size: 12px; font-weight: 600; color: #fff; }
+  .script-desc { font-size: 11px; color: #999; margin-top: 2px; }
   .script-icon {
-    width: 32px;
-    height: 32px;
-    border-radius: 6px;
+    width: 32px; height: 32px; border-radius: 6px;
     background: #0d99ff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
-    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; flex-shrink: 0;
   }
   .empty {
     padding: 40px 14px;
@@ -66,6 +59,77 @@
     color: #666;
     font-size: 12px;
   }
+
+  /* ---- JSON Output View ---- */
+  .json-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #3a3a3a;
+    background: #333;
+    flex-shrink: 0;
+  }
+  .json-toolbar .back-btn {
+    background: none;
+    border: 1px solid #555;
+    color: #ccc;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+  }
+  .json-toolbar .back-btn:hover { background: #444; color: #fff; }
+  .json-stats {
+    flex: 1;
+    font-size: 11px;
+    color: #999;
+    text-align: center;
+  }
+  .json-toolbar .copy-btn {
+    background: #0d99ff;
+    border: none;
+    color: #fff;
+    padding: 5px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    transition: background 0.15s;
+  }
+  .json-toolbar .copy-btn:hover { background: #0b87e0; }
+  .json-toolbar .copy-btn.copied {
+    background: #4ec9b0;
+  }
+  .json-toolbar .download-btn {
+    background: none;
+    border: 1px solid #555;
+    color: #ccc;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+  }
+  .json-toolbar .download-btn:hover { background: #444; color: #fff; }
+  .json-output {
+    flex: 1;
+    overflow: auto;
+    padding: 10px 12px;
+    background: #1e1e1e;
+  }
+  .json-output pre {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #d4d4d4;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  /* ---- Status bar ---- */
   .status {
     padding: 8px 14px;
     font-size: 11px;
@@ -73,6 +137,7 @@
     border-top: 1px solid #3a3a3a;
     background: #2a2a2a;
     display: none;
+    flex-shrink: 0;
   }
   .status.visible { display: block; }
   .status.error { color: #f44747; }
@@ -80,18 +145,61 @@
 </head>
 <body>
 
-<div class="header">My Toolkit</div>
-<div class="script-list" id="list"></div>
+<!-- View: Script List -->
+<div class="view active" id="view-list">
+  <div class="header">My Toolkit</div>
+  <div class="script-list" id="list"></div>
+</div>
+
+<!-- View: JSON Output -->
+<div class="view" id="view-json">
+  <div class="header">Screen to JSON</div>
+  <div class="json-toolbar">
+    <button class="back-btn" id="backBtn">Back</button>
+    <span class="json-stats" id="jsonStats"></span>
+    <button class="download-btn" id="downloadBtn">Download</button>
+    <button class="copy-btn" id="copyBtn">Copy JSON</button>
+  </div>
+  <div class="json-output" id="jsonOutput">
+    <pre id="jsonPre"></pre>
+  </div>
+</div>
+
 <div class="status" id="status"></div>
 
 <script>
 const list = document.getElementById('list');
 const status = document.getElementById('status');
+const viewList = document.getElementById('view-list');
+const viewJson = document.getElementById('view-json');
+const jsonPre = document.getElementById('jsonPre');
+const jsonStats = document.getElementById('jsonStats');
+const copyBtn = document.getElementById('copyBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const backBtn = document.getElementById('backBtn');
+
+let currentJson = '';
+
+function showView(name) {
+  viewList.className = 'view' + (name === 'list' ? ' active' : '');
+  viewJson.className = 'view' + (name === 'json' ? ' active' : '');
+}
 
 function showStatus(text, isError) {
   status.textContent = text;
   status.className = 'status visible' + (isError ? ' error' : '');
   setTimeout(() => { status.className = 'status'; }, 3000);
+}
+
+function syntaxHighlight(json) {
+  // Simple JSON syntax highlighting
+  return json
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"([^"]+)"(?=\s*:)/g, '<span style="color:#9cdcfe">"$1"</span>')
+    .replace(/:\s*"([^"]*)"/g, ': <span style="color:#ce9178">"$1"</span>')
+    .replace(/:\s*(\d+\.?\d*)/g, ': <span style="color:#b5cea8">$1</span>')
+    .replace(/:\s*(true|false)/g, ': <span style="color:#569cd6">$1</span>')
+    .replace(/:\s*(null)/g, ': <span style="color:#569cd6">$1</span>');
 }
 
 function renderScripts(scripts) {
@@ -100,7 +208,7 @@ function renderScripts(scripts) {
     return;
   }
   list.innerHTML = '';
-  scripts.forEach((s, i) => {
+  scripts.forEach((s) => {
     const item = document.createElement('div');
     item.className = 'script-item';
     item.innerHTML = `
@@ -117,12 +225,56 @@ function renderScripts(scripts) {
   });
 }
 
+// Copy to clipboard
+copyBtn.addEventListener('click', () => {
+  if (!currentJson) return;
+  const textarea = document.createElement('textarea');
+  textarea.value = currentJson;
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+  copyBtn.textContent = 'Copied!';
+  copyBtn.classList.add('copied');
+  setTimeout(() => {
+    copyBtn.textContent = 'Copy JSON';
+    copyBtn.classList.remove('copied');
+  }, 2000);
+});
+
+// Download JSON file
+downloadBtn.addEventListener('click', () => {
+  if (!currentJson) return;
+  const blob = new Blob([currentJson], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'figma-screen-' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+// Back button
+backBtn.addEventListener('click', () => {
+  showView('list');
+});
+
 onmessage = (event) => {
   const msg = event.data.pluginMessage;
   if (!msg) return;
+
   if (msg.type === 'script-list') renderScripts(msg.scripts);
   if (msg.type === 'done') showStatus('Done!', false);
   if (msg.type === 'error') showStatus('Error: ' + msg.message, true);
+
+  if (msg.type === 'json-output') {
+    currentJson = msg.json;
+    jsonPre.innerHTML = syntaxHighlight(msg.json);
+    jsonStats.textContent = msg.screenCount + ' screen(s), ' + msg.componentCount + ' reusable component(s)';
+    showView('json');
+  }
 };
 </script>
 </body>

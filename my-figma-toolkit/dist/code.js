@@ -185,17 +185,298 @@
   };
   var thinking_div_default = thinkingDiv;
 
+  // scripts/screen-to-json.ts
+  function rgbaFromFigma(color, opacity) {
+    return {
+      r: Math.round(color.r * 255),
+      g: Math.round(color.g * 255),
+      b: Math.round(color.b * 255),
+      a: parseFloat((("a" in color ? color.a : 1) * (opacity != null ? opacity : 1)).toFixed(2))
+    };
+  }
+  function serializePaint(paint, fileKey) {
+    var _a;
+    const base = {
+      type: paint.type,
+      visible: paint.visible !== false,
+      opacity: (_a = paint.opacity) != null ? _a : 1,
+      blendMode: paint.blendMode
+    };
+    if (paint.type === "SOLID") {
+      base.color = rgbaFromFigma(paint.color, paint.opacity);
+    }
+    if (paint.type === "GRADIENT_LINEAR" || paint.type === "GRADIENT_RADIAL" || paint.type === "GRADIENT_ANGULAR" || paint.type === "GRADIENT_DIAMOND") {
+      base.gradientStops = paint.gradientStops.map((s) => ({
+        position: s.position,
+        color: rgbaFromFigma(s.color)
+      }));
+      base.gradientTransform = paint.gradientTransform;
+    }
+    if (paint.type === "IMAGE") {
+      base.scaleMode = paint.scaleMode;
+      if (paint.imageHash) {
+        base.imageRef = paint.imageHash;
+        base.figmaImageUrl = `https://figma-alpha-api.s3.us-west-2.amazonaws.com/images/${fileKey}/${paint.imageHash}`;
+      }
+    }
+    return base;
+  }
+  function serializeEffect(effect) {
+    const e = {
+      type: effect.type,
+      visible: effect.visible !== false,
+      radius: effect.radius
+    };
+    if ("color" in effect && effect.color) {
+      e.color = rgbaFromFigma(effect.color);
+    }
+    if ("offset" in effect && effect.offset) {
+      e.offset = { x: effect.offset.x, y: effect.offset.y };
+    }
+    if ("spread" in effect) {
+      e.spread = effect.spread;
+    }
+    if (effect.blendMode) {
+      e.blendMode = effect.blendMode;
+    }
+    return e;
+  }
+  function getFileKey() {
+    try {
+      return figma.fileKey || "unknown";
+    } catch (e) {
+      return "unknown";
+    }
+  }
+  var componentUsageMap = /* @__PURE__ */ new Map();
+  function traverseNode(node, fileKey) {
+    var _a;
+    const json = {
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      visible: node.visible,
+      locked: node.locked,
+      x: Math.round(node.x),
+      y: Math.round(node.y),
+      width: Math.round(node.width),
+      height: Math.round(node.height)
+    };
+    if ("rotation" in node && node.rotation !== 0) {
+      json.rotation = node.rotation;
+    }
+    if ("opacity" in node && node.opacity !== 1) {
+      json.opacity = node.opacity;
+    }
+    if ("blendMode" in node && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") {
+      json.blendMode = node.blendMode;
+    }
+    if ("constraints" in node) {
+      json.constraints = {
+        horizontal: node.constraints.horizontal,
+        vertical: node.constraints.vertical
+      };
+    }
+    if ("layoutMode" in node && node.layoutMode !== "NONE") {
+      json.layoutMode = node.layoutMode;
+      json.primaryAxisAlignItems = node.primaryAxisAlignItems;
+      json.counterAxisAlignItems = node.counterAxisAlignItems;
+      json.primaryAxisSizingMode = node.primaryAxisSizingMode;
+      json.counterAxisSizingMode = node.counterAxisSizingMode;
+      json.paddingTop = node.paddingTop;
+      json.paddingRight = node.paddingRight;
+      json.paddingBottom = node.paddingBottom;
+      json.paddingLeft = node.paddingLeft;
+      json.itemSpacing = node.itemSpacing;
+      if ("counterAxisSpacing" in node && node.counterAxisSpacing !== null) {
+        json.counterAxisSpacing = node.counterAxisSpacing;
+      }
+    }
+    if ("layoutAlign" in node) {
+      json.layoutAlign = node.layoutAlign;
+    }
+    if ("layoutGrow" in node && node.layoutGrow !== 0) {
+      json.layoutGrow = node.layoutGrow;
+    }
+    if ("clipsContent" in node) {
+      json.clipsContent = node.clipsContent;
+    }
+    if ("fills" in node && node.fills !== figma.mixed && Array.isArray(node.fills)) {
+      const fills = node.fills.filter((f) => f.visible !== false);
+      if (fills.length > 0) {
+        json.fills = fills.map((f) => serializePaint(f, fileKey));
+      }
+    }
+    if ("strokes" in node && Array.isArray(node.strokes) && node.strokes.length > 0) {
+      json.strokes = node.strokes.map((f) => serializePaint(f, fileKey));
+      if ("strokeWeight" in node) {
+        json.strokeWeight = node.strokeWeight;
+      }
+      if ("strokeAlign" in node) {
+        json.strokeAlign = node.strokeAlign;
+      }
+      if ("dashPattern" in node && ((_a = node.dashPattern) == null ? void 0 : _a.length) > 0) {
+        json.dashPattern = node.dashPattern;
+      }
+    }
+    if ("cornerRadius" in node) {
+      if (node.cornerRadius !== figma.mixed) {
+        if (node.cornerRadius > 0) json.cornerRadius = node.cornerRadius;
+      } else {
+        json.cornerRadius = "mixed";
+        json.topLeftRadius = node.topLeftRadius;
+        json.topRightRadius = node.topRightRadius;
+        json.bottomLeftRadius = node.bottomLeftRadius;
+        json.bottomRightRadius = node.bottomRightRadius;
+      }
+    }
+    if ("effects" in node && node.effects.length > 0) {
+      json.effects = node.effects.filter((e) => e.visible !== false).map((e) => serializeEffect(e));
+    }
+    if (node.type === "TEXT") {
+      json.characters = node.characters;
+      const fontSize = node.fontSize;
+      if (fontSize !== figma.mixed) {
+        json.fontSize = fontSize;
+      } else {
+        json.fontSize = "mixed";
+      }
+      const fontName = node.fontName;
+      if (fontName !== figma.mixed) {
+        json.fontFamily = fontName.family;
+        json.fontWeight = fontName.style;
+      }
+      json.textAlignHorizontal = node.textAlignHorizontal;
+      json.textAlignVertical = node.textAlignVertical;
+      json.textAutoResize = node.textAutoResize;
+      if (node.lineHeight !== figma.mixed) {
+        const lh = node.lineHeight;
+        json.lineHeight = lh.unit === "AUTO" ? "AUTO" : { value: lh.value, unit: lh.unit };
+      }
+      if (node.letterSpacing !== figma.mixed) {
+        const ls = node.letterSpacing;
+        if (ls.value !== 0) {
+          json.letterSpacing = { value: ls.value, unit: ls.unit };
+        }
+      }
+      if (node.textDecoration !== figma.mixed && node.textDecoration !== "NONE") {
+        json.textDecoration = node.textDecoration;
+      }
+      if (node.textCase !== figma.mixed && node.textCase !== "ORIGINAL") {
+        json.textCase = node.textCase;
+      }
+      if (node.paragraphSpacing > 0) {
+        json.paragraphSpacing = node.paragraphSpacing;
+      }
+    }
+    if (node.type === "COMPONENT") {
+      json.isComponent = true;
+      json.componentName = node.name;
+    }
+    if (node.type === "INSTANCE") {
+      json.isInstance = true;
+      json.componentName = node.name;
+      const mainComponent = node.mainComponent;
+      if (mainComponent) {
+        json.componentId = mainComponent.id;
+        const existing = componentUsageMap.get(mainComponent.id);
+        if (existing) {
+          existing.count++;
+        } else {
+          componentUsageMap.set(mainComponent.id, {
+            name: mainComponent.name,
+            count: 1,
+            firstInstanceId: node.id
+          });
+        }
+      }
+      try {
+        const props = node.componentProperties;
+        if (props && Object.keys(props).length > 0) {
+          json.componentProperties = {};
+          for (const [key, val] of Object.entries(props)) {
+            json.componentProperties[key] = {
+              type: val.type,
+              value: val.value
+            };
+          }
+        }
+      } catch (e) {
+      }
+    }
+    if ("fills" in node && node.fills !== figma.mixed && Array.isArray(node.fills)) {
+      for (const fill of node.fills) {
+        if (fill.type === "IMAGE" && fill.imageHash) {
+          json.imageRef = fill.imageHash;
+          json.figmaImageUrl = `https://figma-alpha-api.s3.us-west-2.amazonaws.com/images/${fileKey}/${fill.imageHash}`;
+          break;
+        }
+      }
+    }
+    if ("children" in node) {
+      const childNodes = node.children;
+      if (childNodes && childNodes.length > 0) {
+        json.children = childNodes.filter((child) => child.visible).map((child) => traverseNode(child, fileKey));
+      }
+    }
+    return json;
+  }
+  var screenToJson = {
+    id: "screen-to-json",
+    name: "Screen to JSON",
+    description: "Generate a detailed AI-ready JSON from selected screens",
+    async run() {
+      const selection = figma.currentPage.selection;
+      if (selection.length === 0) {
+        figma.notify("Select one or more frames/screens first.");
+        return;
+      }
+      componentUsageMap.clear();
+      const fileKey = getFileKey();
+      const screens = [];
+      for (const node of selection) {
+        screens.push(traverseNode(node, fileKey));
+      }
+      const reusableComponents = {};
+      for (const [id, data] of componentUsageMap.entries()) {
+        if (data.count >= 2) {
+          reusableComponents[id] = {
+            name: data.name,
+            usageCount: data.count,
+            firstInstanceId: data.firstInstanceId
+          };
+        }
+      }
+      const output = {
+        exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        figmaFileKey: fileKey,
+        screens,
+        reusableComponents
+      };
+      const jsonString = JSON.stringify(output, null, 2);
+      figma.ui.postMessage({
+        type: "json-output",
+        json: jsonString,
+        screenCount: screens.length,
+        componentCount: Object.keys(reusableComponents).length
+      });
+      figma.notify(`Extracted ${screens.length} screen(s) with ${Object.keys(reusableComponents).length} reusable component(s).`);
+    }
+  };
+  var screen_to_json_default = screenToJson;
+
   // scripts/index.ts
   var scripts = [
     square_to_circle_default,
-    thinking_div_default
+    thinking_div_default,
+    screen_to_json_default
     // Add new scripts here:
     // import myNewScript from './my-new-script';
     // myNewScript,
   ];
 
   // code.ts
-  figma.showUI(__html__, { width: 320, height: 400 });
+  figma.showUI(__html__, { width: 400, height: 500 });
   var scriptList = scripts.map((s) => ({
     id: s.id,
     name: s.name,

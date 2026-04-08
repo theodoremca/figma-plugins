@@ -10,10 +10,12 @@
 import { Script } from './types';
 import squareToCircle from './square-to-circle';
 import thinkingDiv from './thinking-div';
+import screenToJson from './screen-to-json';
 
 export const scripts: Script[] = [
   squareToCircle,
   thinkingDiv,
+  screenToJson,
   // Add new scripts here:
   // import myNewScript from './my-new-script';
   // myNewScript,

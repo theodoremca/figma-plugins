@@ -1,6 +1,6 @@
 import { scripts } from './scripts';
 
-figma.showUI(__html__, { width: 320, height: 400 });
+figma.showUI(__html__, { width: 400, height: 500 });
 
 // Send the script list to the UI on launch
 const scriptList = scripts.map(s => ({
