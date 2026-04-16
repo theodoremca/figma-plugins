@@ -11,11 +11,13 @@ import { Script } from './types';
 import squareToCircle from './square-to-circle';
 import thinkingDiv from './thinking-div';
 import screenToJson from './screen-to-json';
+import projectBlueprint from './project-blueprint';
 
 export const scripts: Script[] = [
   squareToCircle,
   thinkingDiv,
   screenToJson,
+  projectBlueprint,
   // Add new scripts here:
   // import myNewScript from './my-new-script';
   // myNewScript,

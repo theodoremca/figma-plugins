@@ -291,6 +291,186 @@ export async function enrichScreenJSON(
   }
 }
 
+// ---- Per-Screen Enrichment ----
+// Analyze ONE screen at a time — shorter prompts, better accuracy, less context pressure
+
+const SINGLE_SCREEN_SYSTEM_PROMPT = `You are a UI design analyzer. You receive ONE Figma screen and return structured analysis.
+
+Rules:
+- Be concise. Summary is 1-2 sentences.
+- Semantic roles should be lowercase-kebab-case (e.g., "nav-bar", "search-input", "cta-button").
+- Only tag nodes with generic names (Frame, Group, Rectangle, Vector, Ellipse). Skip nodes that already have meaningful names.
+- Return ONLY valid JSON, no markdown.
+
+Response schema:
+{
+  "summary": "what this screen does / its purpose",
+  "screenType": "e.g. onboarding, home, detail, settings, profile, auth, list, form, modal",
+  "keyElements": ["short descriptions of what's on screen"],
+  "userActions": ["what a user can do here"],
+  "semanticRoles": { "<node-id>": "<role>" }
+}`;
+
+export interface SingleScreenEnrichment {
+  summary: string;
+  screenType: string;
+  keyElements: string[];
+  userActions: string[];
+  semanticRoles: Record<string, string>;
+}
+
+export interface SingleScreenResult {
+  enrichment: SingleScreenEnrichment;
+  usage: AIUsage;
+}
+
+async function callAI(prompt: string, systemPrompt: string, settings: AISettings): Promise<AIRawResult> {
+  if (settings.provider === 'ollama') {
+    const url = `${settings.ollamaUrl}/api/generate`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: settings.ollamaModel,
+        prompt,
+        system: systemPrompt,
+        stream: false,
+        format: 'json',
+        options: { temperature: 0.3, num_ctx: 8192 },
+      }),
+    });
+    if (!response.ok) throw new Error(`Ollama error ${response.status}: ${await response.text()}`);
+    const data = await response.json();
+    return {
+      text: data.response,
+      usage: {
+        promptTokens: data.prompt_eval_count || 0,
+        completionTokens: data.eval_count || 0,
+        totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
+      },
+    };
+  } else {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent?key=${settings.geminiApiKey}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: systemPrompt + '\n\n' + prompt }] }],
+        generationConfig: { temperature: 0.3 },
+      }),
+    });
+    if (!response.ok) throw new Error(`Gemini error ${response.status}: ${await response.text()}`);
+    const data = await response.json();
+    const candidate = data.candidates?.[0];
+    if (!candidate?.content?.parts?.[0]?.text) throw new Error('No response from Gemini');
+    let raw = candidate.content.parts[0].text.trim();
+    const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) raw = jsonMatch[1].trim();
+    const meta = data.usageMetadata || {};
+    return {
+      text: raw,
+      usage: {
+        promptTokens: meta.promptTokenCount || 0,
+        completionTokens: meta.candidatesTokenCount || 0,
+        totalTokens: meta.totalTokenCount || 0,
+      },
+    };
+  }
+}
+
+/** Analyze a single screen — called once per screen in per-screen mode */
+export async function enrichSingleScreen(
+  screen: any,
+  settings: AISettings
+): Promise<SingleScreenResult | null> {
+  try {
+    const startTime = Date.now();
+    const trimmed = trimForAI(screen, 0, 3);
+    const prompt = `Analyze this Figma screen:\n\n${JSON.stringify(trimmed, null, 2)}`;
+
+    const result = await callAI(prompt, SINGLE_SCREEN_SYSTEM_PROMPT, settings);
+    const durationMs = Date.now() - startTime;
+    const model = settings.provider === 'ollama' ? settings.ollamaModel : settings.geminiModel;
+
+    const parsed = JSON.parse(result.text);
+    const enrichment: SingleScreenEnrichment = {
+      summary: parsed.summary || '',
+      screenType: parsed.screenType || '',
+      keyElements: Array.isArray(parsed.keyElements) ? parsed.keyElements : [],
+      userActions: Array.isArray(parsed.userActions) ? parsed.userActions : [],
+      semanticRoles: (parsed.semanticRoles && typeof parsed.semanticRoles === 'object') ? parsed.semanticRoles : {},
+    };
+
+    const usage: AIUsage = {
+      provider: settings.provider,
+      model,
+      promptTokens: result.usage.promptTokens,
+      completionTokens: result.usage.completionTokens,
+      totalTokens: result.usage.totalTokens,
+      estimatedCostUSD: estimateCost(model, result.usage.promptTokens, result.usage.completionTokens),
+      durationMs,
+    };
+    return { enrichment, usage };
+  } catch (err: any) {
+    console.error('Single screen enrichment failed:', err);
+    return null;
+  }
+}
+
+/** Final flow analysis — combines all per-screen summaries into overall flow description */
+const COMBINE_SYSTEM_PROMPT = `You are a UX analyst. You receive summaries of multiple screens and produce a final flow analysis.
+
+Rules:
+- flowDescription is a single paragraph describing the user journey.
+- sharedComponents identifies UI patterns that appear across multiple screens.
+- Return ONLY valid JSON, no markdown.
+
+Response schema:
+{
+  "flowDescription": "single paragraph describing the overall user flow",
+  "sharedComponents": [{ "name": "<component-name>", "description": "<what-it-is>", "foundInScreens": ["<screen-name>"] }]
+}`;
+
+export interface CombinedFlowResult {
+  flowDescription: string;
+  sharedComponents: Array<{ name: string; description: string; foundInScreens: string[] }>;
+  usage: AIUsage;
+}
+
+export async function combineScreenSummaries(
+  screenSummaries: Array<{ name: string; summary: string; screenType: string; keyElements: string[] }>,
+  settings: AISettings
+): Promise<CombinedFlowResult | null> {
+  if (screenSummaries.length === 0) return null;
+  try {
+    const startTime = Date.now();
+    const prompt = `Analyze this app's flow based on these screen summaries:\n\n${JSON.stringify(screenSummaries, null, 2)}`;
+
+    const result = await callAI(prompt, COMBINE_SYSTEM_PROMPT, settings);
+    const durationMs = Date.now() - startTime;
+    const model = settings.provider === 'ollama' ? settings.ollamaModel : settings.geminiModel;
+
+    const parsed = JSON.parse(result.text);
+    const usage: AIUsage = {
+      provider: settings.provider,
+      model,
+      promptTokens: result.usage.promptTokens,
+      completionTokens: result.usage.completionTokens,
+      totalTokens: result.usage.totalTokens,
+      estimatedCostUSD: estimateCost(model, result.usage.promptTokens, result.usage.completionTokens),
+      durationMs,
+    };
+    return {
+      flowDescription: parsed.flowDescription || '',
+      sharedComponents: Array.isArray(parsed.sharedComponents) ? parsed.sharedComponents : [],
+      usage,
+    };
+  } catch (err: any) {
+    console.error('Combine summaries failed:', err);
+    return null;
+  }
+}
+
 // ---- Apply Enrichment to JSON ----
 
 export function applyEnrichment(screens: any[], enrichment: AIEnrichment): void {

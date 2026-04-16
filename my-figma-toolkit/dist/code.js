@@ -4,8 +4,22 @@
   var __defProp = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __getOwnPropSymbols = Object.getOwnPropertySymbols;
   var __getProtoOf = Object.getPrototypeOf;
   var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __propIsEnum = Object.prototype.propertyIsEnumerable;
+  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __spreadValues = (a, b) => {
+    for (var prop in b || (b = {}))
+      if (__hasOwnProp.call(b, prop))
+        __defNormalProp(a, prop, b[prop]);
+    if (__getOwnPropSymbols)
+      for (var prop of __getOwnPropSymbols(b)) {
+        if (__propIsEnum.call(b, prop))
+          __defNormalProp(a, prop, b[prop]);
+      }
+    return a;
+  };
   var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
     get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
   }) : x)(function(x) {
@@ -2583,6 +2597,14 @@
   };
   var thinking_div_default = thinkingDiv;
 
+  // scripts/types.ts
+  var DEFAULT_SCREEN_TO_JSON_OPTIONS = {
+    exportImages: true,
+    outputMode: "detailed",
+    aiEnabled: false,
+    aiMode: "per-screen"
+  };
+
   // scripts/screen-to-json.ts
   var import_jszip = __toESM(require_jszip_min());
 
@@ -2771,6 +2793,151 @@ ${JSON.stringify(trimmed, null, 2)}`;
     } catch (err) {
       console.error("AI enrichment failed:", err);
       figma.notify("AI enrichment failed: " + (err.message || String(err)), { timeout: 5e3 });
+      return null;
+    }
+  }
+  var SINGLE_SCREEN_SYSTEM_PROMPT = `You are a UI design analyzer. You receive ONE Figma screen and return structured analysis.
+
+Rules:
+- Be concise. Summary is 1-2 sentences.
+- Semantic roles should be lowercase-kebab-case (e.g., "nav-bar", "search-input", "cta-button").
+- Only tag nodes with generic names (Frame, Group, Rectangle, Vector, Ellipse). Skip nodes that already have meaningful names.
+- Return ONLY valid JSON, no markdown.
+
+Response schema:
+{
+  "summary": "what this screen does / its purpose",
+  "screenType": "e.g. onboarding, home, detail, settings, profile, auth, list, form, modal",
+  "keyElements": ["short descriptions of what's on screen"],
+  "userActions": ["what a user can do here"],
+  "semanticRoles": { "<node-id>": "<role>" }
+}`;
+  async function callAI(prompt, systemPrompt, settings) {
+    var _a, _b, _c, _d;
+    if (settings.provider === "ollama") {
+      const url = `${settings.ollamaUrl}/api/generate`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: settings.ollamaModel,
+          prompt,
+          system: systemPrompt,
+          stream: false,
+          format: "json",
+          options: { temperature: 0.3, num_ctx: 8192 }
+        })
+      });
+      if (!response.ok) throw new Error(`Ollama error ${response.status}: ${await response.text()}`);
+      const data = await response.json();
+      return {
+        text: data.response,
+        usage: {
+          promptTokens: data.prompt_eval_count || 0,
+          completionTokens: data.eval_count || 0,
+          totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0)
+        }
+      };
+    } else {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent?key=${settings.geminiApiKey}`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: systemPrompt + "\n\n" + prompt }] }],
+          generationConfig: { temperature: 0.3 }
+        })
+      });
+      if (!response.ok) throw new Error(`Gemini error ${response.status}: ${await response.text()}`);
+      const data = await response.json();
+      const candidate = (_a = data.candidates) == null ? void 0 : _a[0];
+      if (!((_d = (_c = (_b = candidate == null ? void 0 : candidate.content) == null ? void 0 : _b.parts) == null ? void 0 : _c[0]) == null ? void 0 : _d.text)) throw new Error("No response from Gemini");
+      let raw = candidate.content.parts[0].text.trim();
+      const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) raw = jsonMatch[1].trim();
+      const meta = data.usageMetadata || {};
+      return {
+        text: raw,
+        usage: {
+          promptTokens: meta.promptTokenCount || 0,
+          completionTokens: meta.candidatesTokenCount || 0,
+          totalTokens: meta.totalTokenCount || 0
+        }
+      };
+    }
+  }
+  async function enrichSingleScreen(screen, settings) {
+    try {
+      const startTime = Date.now();
+      const trimmed = trimForAI(screen, 0, 3);
+      const prompt = `Analyze this Figma screen:
+
+${JSON.stringify(trimmed, null, 2)}`;
+      const result = await callAI(prompt, SINGLE_SCREEN_SYSTEM_PROMPT, settings);
+      const durationMs = Date.now() - startTime;
+      const model = settings.provider === "ollama" ? settings.ollamaModel : settings.geminiModel;
+      const parsed = JSON.parse(result.text);
+      const enrichment = {
+        summary: parsed.summary || "",
+        screenType: parsed.screenType || "",
+        keyElements: Array.isArray(parsed.keyElements) ? parsed.keyElements : [],
+        userActions: Array.isArray(parsed.userActions) ? parsed.userActions : [],
+        semanticRoles: parsed.semanticRoles && typeof parsed.semanticRoles === "object" ? parsed.semanticRoles : {}
+      };
+      const usage = {
+        provider: settings.provider,
+        model,
+        promptTokens: result.usage.promptTokens,
+        completionTokens: result.usage.completionTokens,
+        totalTokens: result.usage.totalTokens,
+        estimatedCostUSD: estimateCost(model, result.usage.promptTokens, result.usage.completionTokens),
+        durationMs
+      };
+      return { enrichment, usage };
+    } catch (err) {
+      console.error("Single screen enrichment failed:", err);
+      return null;
+    }
+  }
+  var COMBINE_SYSTEM_PROMPT = `You are a UX analyst. You receive summaries of multiple screens and produce a final flow analysis.
+
+Rules:
+- flowDescription is a single paragraph describing the user journey.
+- sharedComponents identifies UI patterns that appear across multiple screens.
+- Return ONLY valid JSON, no markdown.
+
+Response schema:
+{
+  "flowDescription": "single paragraph describing the overall user flow",
+  "sharedComponents": [{ "name": "<component-name>", "description": "<what-it-is>", "foundInScreens": ["<screen-name>"] }]
+}`;
+  async function combineScreenSummaries(screenSummaries, settings) {
+    if (screenSummaries.length === 0) return null;
+    try {
+      const startTime = Date.now();
+      const prompt = `Analyze this app's flow based on these screen summaries:
+
+${JSON.stringify(screenSummaries, null, 2)}`;
+      const result = await callAI(prompt, COMBINE_SYSTEM_PROMPT, settings);
+      const durationMs = Date.now() - startTime;
+      const model = settings.provider === "ollama" ? settings.ollamaModel : settings.geminiModel;
+      const parsed = JSON.parse(result.text);
+      const usage = {
+        provider: settings.provider,
+        model,
+        promptTokens: result.usage.promptTokens,
+        completionTokens: result.usage.completionTokens,
+        totalTokens: result.usage.totalTokens,
+        estimatedCostUSD: estimateCost(model, result.usage.promptTokens, result.usage.completionTokens),
+        durationMs
+      };
+      return {
+        flowDescription: parsed.flowDescription || "",
+        sharedComponents: Array.isArray(parsed.sharedComponents) ? parsed.sharedComponents : [],
+        usage
+      };
+    } catch (err) {
+      console.error("Combine summaries failed:", err);
       return null;
     }
   }
@@ -3129,11 +3296,41 @@ ${JSON.stringify(trimmed, null, 2)}`;
       }
     }
   }
+  function toCompactScreen(node) {
+    const compact = {
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      width: node.width,
+      height: node.height
+    };
+    if (node.fills && node.fills.length > 0) {
+      const firstSolid = node.fills.find((f) => f.type === "SOLID");
+      if (firstSolid == null ? void 0 : firstSolid.color) {
+        compact.fillColor = firstSolid.color;
+      }
+    }
+    if (node.cornerRadius) compact.cornerRadius = node.cornerRadius;
+    if (node.characters) compact.text = node.characters.slice(0, 100);
+    if (node.fontFamily) compact.font = `${node.fontFamily} ${node.fontWeight || ""}`.trim();
+    if (node.fontSize) compact.fontSize = node.fontSize;
+    if (node.layoutMode && node.layoutMode !== "NONE") compact.layout = node.layoutMode;
+    if (node.imageFiles) compact.image = node.imageFiles.png;
+    if (node.isInstance && node.componentName) compact.component = node.componentName;
+    if (node.semanticRole) compact.role = node.semanticRole;
+    if (node.summary) compact.summary = node.summary;
+    if (node.children && node.children.length > 0) {
+      compact.children = node.children.map(toCompactScreen);
+    }
+    return compact;
+  }
   var screenToJson = {
     id: "screen-to-json",
     name: "Screen to JSON",
     description: "Generate a detailed AI-ready JSON from selected screens (ZIP with images)",
-    async run() {
+    hasConfig: true,
+    async run(options) {
+      const opts = __spreadValues(__spreadValues({}, DEFAULT_SCREEN_TO_JSON_OPTIONS), options || {});
       const selection = figma.currentPage.selection;
       if (selection.length === 0) {
         figma.notify("Select one or more frames/screens first.");
@@ -3163,7 +3360,7 @@ ${JSON.stringify(trimmed, null, 2)}`;
       }
       const zip = new import_jszip.default();
       const allExportedFiles = [];
-      if (imageExportTasks.length > 0) {
+      if (opts.exportImages && imageExportTasks.length > 0) {
         figma.notify(`Exporting ${imageExportTasks.length} image(s) at ${IMAGE_SCALE}x...`);
         for (const task of imageExportTasks) {
           try {
@@ -3188,7 +3385,11 @@ ${JSON.stringify(trimmed, null, 2)}`;
           }
         }
       }
-      patchFullPaths(screens, fullBasePath);
+      if (opts.exportImages) {
+        patchFullPaths(screens, fullBasePath);
+      } else {
+        stripImageFiles(screens);
+      }
       const reusableComponents = {};
       for (const [id, data] of componentUsageMap.entries()) {
         if (data.count >= 2) {
@@ -3203,33 +3404,97 @@ ${JSON.stringify(trimmed, null, 2)}`;
       let aiEnriched = false;
       let flowDescription;
       let sharedComponents;
-      if (aiSettings.enabled) {
-        figma.notify(`Analyzing with AI (${aiSettings.provider})...`);
+      const perScreenUsage = [];
+      let totalUsage;
+      if (opts.aiEnabled && aiSettings.enabled) {
         figma.ui.postMessage({ type: "ai-status", status: "running" });
-        const result = await enrichScreenJSON({ screens, reusableComponents }, aiSettings);
-        if (result) {
-          aiEnriched = true;
-          applyEnrichment(screens, result.enrichment);
-          flowDescription = result.enrichment.flowDescription;
-          sharedComponents = result.enrichment.sharedComponents;
-          figma.ui.postMessage({ type: "ai-status", status: "done", usage: result.usage });
+        if (opts.aiMode === "per-screen") {
+          const screenSummaryData = [];
+          for (let i = 0; i < screens.length; i++) {
+            const screen = screens[i];
+            figma.notify(`AI analyzing screen ${i + 1}/${screens.length}: ${screen.name}`);
+            figma.ui.postMessage({ type: "ai-progress", current: i + 1, total: screens.length, screenName: screen.name });
+            const singleResult = await enrichSingleScreen(screen, aiSettings);
+            if (singleResult) {
+              screen.summary = singleResult.enrichment.summary;
+              screen.screenType = singleResult.enrichment.screenType;
+              screen.keyElements = singleResult.enrichment.keyElements;
+              screen.userActions = singleResult.enrichment.userActions;
+              const applyRoles = (node) => {
+                if (singleResult.enrichment.semanticRoles[node.id]) {
+                  node.semanticRole = singleResult.enrichment.semanticRoles[node.id];
+                }
+                if (node.children) {
+                  for (const child of node.children) applyRoles(child);
+                }
+              };
+              applyRoles(screen);
+              perScreenUsage.push(singleResult.usage);
+              screenSummaryData.push({
+                name: screen.name,
+                summary: singleResult.enrichment.summary,
+                screenType: singleResult.enrichment.screenType,
+                keyElements: singleResult.enrichment.keyElements
+              });
+            }
+          }
+          if (screenSummaryData.length > 0) {
+            figma.notify("AI combining screens for flow analysis...");
+            const combined = await combineScreenSummaries(screenSummaryData, aiSettings);
+            if (combined) {
+              flowDescription = combined.flowDescription;
+              sharedComponents = combined.sharedComponents;
+              perScreenUsage.push(combined.usage);
+            }
+            aiEnriched = true;
+          }
+          if (perScreenUsage.length > 0) {
+            const first = perScreenUsage[0];
+            totalUsage = {
+              provider: first.provider,
+              model: first.model,
+              promptTokens: perScreenUsage.reduce((s, u) => s + u.promptTokens, 0),
+              completionTokens: perScreenUsage.reduce((s, u) => s + u.completionTokens, 0),
+              totalTokens: perScreenUsage.reduce((s, u) => s + u.totalTokens, 0),
+              estimatedCostUSD: perScreenUsage.reduce((s, u) => s + u.estimatedCostUSD, 0),
+              durationMs: perScreenUsage.reduce((s, u) => s + u.durationMs, 0)
+            };
+            figma.ui.postMessage({ type: "ai-status", status: "done", usage: totalUsage });
+          } else {
+            figma.ui.postMessage({ type: "ai-status", status: "failed" });
+          }
         } else {
-          figma.ui.postMessage({ type: "ai-status", status: "failed" });
+          figma.notify(`Analyzing with AI (${aiSettings.provider})...`);
+          const result = await enrichScreenJSON({ screens, reusableComponents }, aiSettings);
+          if (result) {
+            aiEnriched = true;
+            applyEnrichment(screens, result.enrichment);
+            flowDescription = result.enrichment.flowDescription;
+            sharedComponents = result.enrichment.sharedComponents;
+            totalUsage = result.usage;
+            figma.ui.postMessage({ type: "ai-status", status: "done", usage: result.usage });
+          } else {
+            figma.ui.postMessage({ type: "ai-status", status: "failed" });
+          }
         }
       }
+      const outputScreens = opts.outputMode === "compact" ? screens.map(toCompactScreen) : screens;
       const output = {
         exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
         figmaFileKey: fileKey,
         exportPath: fullBasePath,
-        imageScale: IMAGE_SCALE,
-        imageFormats: ["png", "jpeg"],
+        outputMode: opts.outputMode,
+        imageScale: opts.exportImages ? IMAGE_SCALE : void 0,
+        imageFormats: opts.exportImages ? ["png", "jpeg"] : void 0,
         aiEnriched,
+        aiMode: opts.aiEnabled ? opts.aiMode : void 0,
         flowDescription,
         sharedComponents,
-        screens,
+        screens: outputScreens,
         reusableComponents,
-        exportedImages: allExportedFiles
+        exportedImages: opts.exportImages ? allExportedFiles : void 0
       };
+      Object.keys(output).forEach((k) => output[k] === void 0 && delete output[k]);
       const jsonString = JSON.stringify(output, null, 2);
       zip.file("screen.json", jsonString);
       figma.notify("Packing ZIP...");
@@ -3239,7 +3504,7 @@ ${JSON.stringify(trimmed, null, 2)}`;
         json: jsonString,
         screenCount: screens.length,
         componentCount: Object.keys(reusableComponents).length,
-        imageCount: imageExportTasks.length
+        imageCount: opts.exportImages ? imageExportTasks.length : 0
       });
       figma.ui.postMessage({
         type: "download-zip",
@@ -3247,20 +3512,472 @@ ${JSON.stringify(trimmed, null, 2)}`;
         zipFilename: `${zipFolderName}.zip`,
         screenCount: screens.length,
         componentCount: Object.keys(reusableComponents).length,
-        imageCount: imageExportTasks.length
+        imageCount: opts.exportImages ? imageExportTasks.length : 0
       });
       figma.notify(
-        `Done! ${screens.length} screen(s), ${Object.keys(reusableComponents).length} reusable component(s), ${imageExportTasks.length} image(s).`
+        `Done! ${screens.length} screen(s), ${Object.keys(reusableComponents).length} reusable, ${opts.exportImages ? imageExportTasks.length + " image(s)" : "no images"}.`
       );
     }
   };
+  function stripImageFiles(nodes) {
+    for (const node of nodes) {
+      delete node.imageFiles;
+      delete node.imageRef;
+      if (node.fills) {
+        for (const fill of node.fills) {
+          delete fill.imageFiles;
+          delete fill.imageRef;
+        }
+      }
+      if (node.children) stripImageFiles(node.children);
+    }
+  }
   var screen_to_json_default = screenToJson;
+
+  // scripts/project-blueprint.ts
+  function rgbToHex(r, g, b) {
+    const toHex = (n) => Math.round(n * 255).toString(16).padStart(2, "0");
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+  var colorMap = /* @__PURE__ */ new Map();
+  var fontMap = /* @__PURE__ */ new Map();
+  var cornerRadii = /* @__PURE__ */ new Set();
+  var spacingValues = /* @__PURE__ */ new Set();
+  var componentMap = /* @__PURE__ */ new Map();
+  function collectColors(node) {
+    var _a;
+    if ("fills" in node && node.fills !== figma.mixed && Array.isArray(node.fills)) {
+      for (const fill of node.fills) {
+        if (fill.type === "SOLID" && fill.visible !== false) {
+          const hex = rgbToHex(fill.color.r, fill.color.g, fill.color.b);
+          const existing = colorMap.get(hex);
+          if (existing) {
+            existing.usageCount++;
+            if (!existing.usedOn.includes(node.name) && existing.usedOn.length < 5) {
+              existing.usedOn.push(node.name);
+            }
+          } else {
+            colorMap.set(hex, {
+              hex,
+              rgba: {
+                r: Math.round(fill.color.r * 255),
+                g: Math.round(fill.color.g * 255),
+                b: Math.round(fill.color.b * 255),
+                a: (_a = fill.opacity) != null ? _a : 1
+              },
+              usageCount: 1,
+              usedOn: [node.name]
+            });
+          }
+        }
+      }
+    }
+  }
+  function collectFonts(node) {
+    if (node.type === "TEXT") {
+      const fontName = node.fontName;
+      if (fontName !== figma.mixed) {
+        const key = `${fontName.family}::${fontName.style}`;
+        const existing = fontMap.get(key);
+        const fontSize = node.fontSize !== figma.mixed ? node.fontSize : 0;
+        if (existing) {
+          existing.usageCount++;
+          if (fontSize > 0 && !existing.sizes.includes(fontSize)) {
+            existing.sizes.push(fontSize);
+          }
+        } else {
+          fontMap.set(key, {
+            family: fontName.family,
+            style: fontName.style,
+            sizes: fontSize > 0 ? [fontSize] : [],
+            usageCount: 1
+          });
+        }
+      }
+    }
+  }
+  function collectSpacing(node) {
+    if ("cornerRadius" in node && node.cornerRadius !== figma.mixed && node.cornerRadius > 0) {
+      cornerRadii.add(node.cornerRadius);
+    }
+    if ("layoutMode" in node && node.layoutMode !== "NONE") {
+      if (node.itemSpacing > 0) spacingValues.add(node.itemSpacing);
+      if (node.paddingTop > 0) spacingValues.add(node.paddingTop);
+      if (node.paddingRight > 0) spacingValues.add(node.paddingRight);
+      if (node.paddingBottom > 0) spacingValues.add(node.paddingBottom);
+      if (node.paddingLeft > 0) spacingValues.add(node.paddingLeft);
+    }
+  }
+  function collectComponents(node, screenName) {
+    if (node.type === "INSTANCE" && node.mainComponent) {
+      const mc = node.mainComponent;
+      const existing = componentMap.get(mc.id);
+      if (existing) {
+        existing.usageCount++;
+        if (!existing.usedInScreens.includes(screenName)) {
+          existing.usedInScreens.push(screenName);
+        }
+      } else {
+        componentMap.set(mc.id, {
+          id: mc.id,
+          name: mc.name,
+          usageCount: 1,
+          usedInScreens: [screenName]
+        });
+      }
+    }
+  }
+  function hasNodeType(node, check) {
+    if (check(node)) return true;
+    if ("children" in node) {
+      for (const child of node.children) {
+        if (hasNodeType(child, check)) return true;
+      }
+    }
+    return false;
+  }
+  function collectTextContent(node, texts) {
+    if (node.type === "TEXT" && node.characters.trim().length > 0) {
+      const text = node.characters.trim().slice(0, 80);
+      if (texts.length < 30) texts.push(text);
+    }
+    if ("children" in node) {
+      for (const child of node.children) {
+        if (child.visible) collectTextContent(child, texts);
+      }
+    }
+  }
+  function traverseAll(node, screenName) {
+    collectColors(node);
+    collectFonts(node);
+    collectSpacing(node);
+    collectComponents(node, screenName);
+    if ("children" in node) {
+      for (const child of node.children) {
+        if (child.visible) traverseAll(child, screenName);
+      }
+    }
+  }
+  function countChildren(node) {
+    let count = 0;
+    if ("children" in node) {
+      for (const child of node.children) {
+        if (child.visible) {
+          count++;
+          count += countChildren(child);
+        }
+      }
+    }
+    return count;
+  }
+  function guessPlatform(screens) {
+    if (screens.length === 0) return "unknown";
+    const widths = screens.map((s) => s.width);
+    const avg = widths.reduce((a, b) => a + b, 0) / widths.length;
+    if (avg <= 430) return "mobile";
+    if (avg <= 850) return "tablet";
+    if (avg <= 1440) return "desktop";
+    return "mixed";
+  }
+  function buildBlueprintPrompt(data) {
+    return `Analyze this Figma project and generate a comprehensive product blueprint.
+
+## Project Data
+
+**Platform:** ${data.platformHint}
+**Total Screens:** ${data.screenCount}
+
+### Screens:
+${data.screens.map((s) => `- "${s.name}" (${s.width}x${s.height}, ${s.childCount} elements)
+  Inputs: ${s.hasTextInputs} | Buttons: ${s.hasButtons} | Images: ${s.hasImages} | Lists: ${s.hasList} | Nav: ${s.hasNavigation}
+  Components: ${s.componentInstances.slice(0, 10).join(", ") || "none"}
+  Text: ${s.textContent.slice(0, 8).join(" | ") || "none"}`).join("\n")}
+
+### Reusable Components (${data.components.length}):
+${data.components.slice(0, 30).map((c) => `- "${c.name}" \u2014 used ${c.usageCount}x in: ${c.usedInScreens.join(", ")}`).join("\n")}
+
+### Design Tokens:
+**Colors (${data.designTokens.colors.length}):** ${data.designTokens.colors.slice(0, 15).map((c) => `${c.hex} (${c.usageCount}x)`).join(", ")}
+**Fonts:** ${data.designTokens.fonts.map((f) => `${f.family} ${f.style} [${f.sizes.sort((a, b) => a - b).join(", ")}px]`).join(", ")}
+**Corner Radii:** ${Array.from(data.designTokens.cornerRadii).sort((a, b) => a - b).join(", ")}px
+**Spacing:** ${Array.from(data.designTokens.spacingValues).sort((a, b) => a - b).join(", ")}px
+
+---
+
+Generate a JSON response with this exact structure:
+{
+  "projectName": "inferred name for this product",
+  "projectDescription": "2-3 sentence overview of what this product does",
+  "platform": "mobile/tablet/desktop/web",
+  "category": "e.g. social media, e-commerce, fintech, productivity, health, etc.",
+  "targetAudience": "who this product is for",
+  "designStyle": "describe the visual design language (minimal, bold, corporate, playful, etc.)",
+  "colorScheme": {
+    "primary": "#hex",
+    "secondary": "#hex",
+    "accent": "#hex",
+    "background": "#hex",
+    "surface": "#hex",
+    "textPrimary": "#hex",
+    "textSecondary": "#hex",
+    "error": "#hex",
+    "success": "#hex"
+  },
+  "typography": {
+    "headingFont": "font family",
+    "bodyFont": "font family",
+    "sizes": { "h1": 0, "h2": 0, "h3": 0, "body": 0, "caption": 0 }
+  },
+  "screens": [
+    {
+      "name": "screen name",
+      "purpose": "what this screen does",
+      "screenType": "e.g. onboarding, home, detail, settings, profile, auth, list, form, modal",
+      "keyElements": ["element descriptions"],
+      "userActions": ["what the user can do here"]
+    }
+  ],
+  "userFlows": [
+    {
+      "name": "flow name (e.g. Onboarding, Purchase, Login)",
+      "description": "what this flow accomplishes",
+      "steps": ["Screen A \u2192 Screen B \u2192 Screen C"],
+      "userStory": "As a [user], I want to [action] so that [benefit]"
+    }
+  ],
+  "features": [
+    {
+      "name": "feature name",
+      "description": "what it does",
+      "relatedScreens": ["screen names"]
+    }
+  ],
+  "navigation": {
+    "pattern": "tab bar / drawer / stack / hybrid",
+    "mainSections": ["section names"]
+  },
+  "reusablePatterns": [
+    {
+      "name": "pattern name (e.g. Card, ListItem, Header)",
+      "description": "what it looks like and where it's used",
+      "usageCount": 0
+    }
+  ],
+  "technicalNotes": "any technical observations (API patterns, auth method, data structures implied by the UI)"
+}`;
+  }
+  var BLUEPRINT_SYSTEM_PROMPT = `You are a senior product analyst and UI/UX expert. You analyze Figma design projects and produce comprehensive product blueprints.
+
+Your output is used by AI coding assistants and AI design tools to recreate similar products from scratch. Be specific, detailed, and accurate.
+
+Rules:
+- Infer screen purposes from their names, text content, element types, and layout.
+- Detect user flows by analyzing screen names and navigation patterns.
+- Identify the color scheme by categorizing the most-used colors.
+- Generate realistic user stories for each flow.
+- Be specific about features \u2014 don't just list generic things.
+- Return ONLY valid JSON, no markdown fences.`;
+  async function callAI2(prompt, settings) {
+    var _a, _b, _c, _d;
+    if (settings.provider === "ollama") {
+      const url = `${settings.ollamaUrl}/api/generate`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: settings.ollamaModel,
+          prompt,
+          system: BLUEPRINT_SYSTEM_PROMPT,
+          stream: false,
+          format: "json",
+          options: { temperature: 0.3, num_ctx: 16384 }
+        })
+      });
+      if (!response.ok) throw new Error(`Ollama error ${response.status}: ${await response.text()}`);
+      const data = await response.json();
+      return {
+        text: data.response,
+        usage: {
+          promptTokens: data.prompt_eval_count || 0,
+          completionTokens: data.eval_count || 0,
+          totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0)
+        }
+      };
+    } else {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${settings.geminiModel}:generateContent?key=${settings.geminiApiKey}`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: BLUEPRINT_SYSTEM_PROMPT + "\n\n" + prompt }] }],
+          generationConfig: { temperature: 0.3 }
+        })
+      });
+      if (!response.ok) throw new Error(`Gemini error ${response.status}: ${await response.text()}`);
+      const data = await response.json();
+      const candidate = (_a = data.candidates) == null ? void 0 : _a[0];
+      if (!((_d = (_c = (_b = candidate == null ? void 0 : candidate.content) == null ? void 0 : _b.parts) == null ? void 0 : _c[0]) == null ? void 0 : _d.text)) throw new Error("No response from Gemini");
+      let raw = candidate.content.parts[0].text.trim();
+      const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) raw = jsonMatch[1].trim();
+      const meta = data.usageMetadata || {};
+      return {
+        text: raw,
+        usage: {
+          promptTokens: meta.promptTokenCount || 0,
+          completionTokens: meta.candidatesTokenCount || 0,
+          totalTokens: meta.totalTokenCount || 0
+        }
+      };
+    }
+  }
+  var PRICING2 = {
+    "gemini-2.5-flash": { input: 0.15, output: 0.6 },
+    "gemini-2.5-flash-lite": { input: 0.05, output: 0.2 },
+    "gemini-2.5-pro": { input: 1.25, output: 5 },
+    "gemini-2.0-flash": { input: 0.1, output: 0.4 },
+    "gemini-2.0-flash-lite": { input: 0.05, output: 0.2 },
+    "gemini-1.5-flash": { input: 0.075, output: 0.3 },
+    "gemini-1.5-pro": { input: 1.25, output: 5 },
+    "_default": { input: 0, output: 0 }
+  };
+  var projectBlueprint = {
+    id: "project-blueprint",
+    name: "Project Blueprint",
+    description: "Generate a full product spec from selected screens (features, flows, design tokens)",
+    async run() {
+      const selection = figma.currentPage.selection;
+      if (selection.length === 0) {
+        figma.notify("Select all screens/frames of the project first.");
+        return;
+      }
+      const aiSettings = await figma.clientStorage.getAsync(AI_SETTINGS_KEY) || DEFAULT_AI_SETTINGS;
+      if (!aiSettings.enabled) {
+        figma.notify("Enable AI in Settings first \u2014 this script requires AI to generate the blueprint.");
+        figma.ui.postMessage({ type: "show-settings" });
+        return;
+      }
+      colorMap.clear();
+      fontMap.clear();
+      cornerRadii.clear();
+      spacingValues.clear();
+      componentMap.clear();
+      figma.notify(`Scanning ${selection.length} screen(s)...`);
+      const screens = [];
+      for (const node of selection) {
+        let findInstances2 = function(n) {
+          if (n.type === "INSTANCE") componentInstances.push(n.name);
+          if ("children" in n) {
+            for (const child of n.children) {
+              if (child.visible) findInstances2(child);
+            }
+          }
+        };
+        var findInstances = findInstances2;
+        const texts = [];
+        collectTextContent(node, texts);
+        traverseAll(node, node.name);
+        const componentInstances = [];
+        findInstances2(node);
+        screens.push({
+          id: node.id,
+          name: node.name,
+          width: Math.round(node.width),
+          height: Math.round(node.height),
+          childCount: countChildren(node),
+          hasTextInputs: hasNodeType(node, (n) => n.name.toLowerCase().includes("input") || n.name.toLowerCase().includes("text field") || n.name.toLowerCase().includes("search")),
+          hasButtons: hasNodeType(node, (n) => n.name.toLowerCase().includes("button") || n.name.toLowerCase().includes("btn") || n.name.toLowerCase().includes("cta")),
+          hasImages: hasNodeType(node, (n) => {
+            if ("fills" in n && n.fills !== figma.mixed && Array.isArray(n.fills)) {
+              return n.fills.some((f) => f.type === "IMAGE");
+            }
+            return false;
+          }),
+          hasList: hasNodeType(node, (n) => n.name.toLowerCase().includes("list") || n.name.toLowerCase().includes("scroll") || n.name.toLowerCase().includes("feed")),
+          hasNavigation: hasNodeType(node, (n) => n.name.toLowerCase().includes("nav") || n.name.toLowerCase().includes("tab bar") || n.name.toLowerCase().includes("bottom bar") || n.name.toLowerCase().includes("header")),
+          componentInstances: [...new Set(componentInstances)],
+          textContent: texts
+        });
+      }
+      const sortedColors = Array.from(colorMap.values()).sort((a, b) => b.usageCount - a.usageCount);
+      const sortedFonts = Array.from(fontMap.values()).sort((a, b) => b.usageCount - a.usageCount);
+      const projectData = {
+        screenCount: screens.length,
+        screens,
+        components: Array.from(componentMap.values()).sort((a, b) => b.usageCount - a.usageCount),
+        designTokens: {
+          colors: sortedColors,
+          fonts: sortedFonts,
+          cornerRadii: Array.from(cornerRadii).sort((a, b) => a - b),
+          spacingValues: Array.from(spacingValues).sort((a, b) => a - b)
+        },
+        platformHint: guessPlatform(screens)
+      };
+      figma.notify(`Generating blueprint with AI (${aiSettings.provider})...`);
+      figma.ui.postMessage({ type: "ai-status", status: "running" });
+      const startTime = Date.now();
+      try {
+        const prompt = buildBlueprintPrompt(projectData);
+        const result = await callAI2(prompt, aiSettings);
+        const durationMs = Date.now() - startTime;
+        const model = aiSettings.provider === "ollama" ? aiSettings.ollamaModel : aiSettings.geminiModel;
+        const price = PRICING2[model] || PRICING2["_default"];
+        const cost = result.usage.promptTokens / 1e6 * price.input + result.usage.completionTokens / 1e6 * price.output;
+        const usage = {
+          provider: aiSettings.provider,
+          model,
+          promptTokens: result.usage.promptTokens,
+          completionTokens: result.usage.completionTokens,
+          totalTokens: result.usage.totalTokens,
+          estimatedCostUSD: cost,
+          durationMs
+        };
+        let blueprint;
+        try {
+          blueprint = JSON.parse(result.text);
+        } catch (e) {
+          blueprint = { rawResponse: result.text };
+        }
+        blueprint._meta = {
+          generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          screenCount: screens.length,
+          componentCount: projectData.components.length,
+          colorCount: sortedColors.length,
+          fontCount: sortedFonts.length,
+          platform: projectData.platformHint,
+          aiUsage: usage
+        };
+        blueprint.rawDesignTokens = {
+          allColors: sortedColors.slice(0, 20),
+          allFonts: sortedFonts,
+          cornerRadii: projectData.designTokens.cornerRadii,
+          spacing: projectData.designTokens.spacingValues
+        };
+        const jsonString = JSON.stringify(blueprint, null, 2);
+        figma.ui.postMessage({ type: "ai-status", status: "done", usage });
+        figma.ui.postMessage({
+          type: "json-output",
+          json: jsonString,
+          screenCount: screens.length,
+          componentCount: projectData.components.length,
+          imageCount: 0
+        });
+        figma.notify(`Blueprint generated! ${screens.length} screens analyzed.`);
+      } catch (err) {
+        figma.ui.postMessage({ type: "ai-status", status: "failed" });
+        figma.notify("Blueprint generation failed: " + (err.message || String(err)), { timeout: 5e3 });
+        console.error("Blueprint failed:", err);
+      }
+    }
+  };
+  var project_blueprint_default = projectBlueprint;
 
   // scripts/index.ts
   var scripts = [
     square_to_circle_default,
     thinking_div_default,
-    screen_to_json_default
+    screen_to_json_default,
+    project_blueprint_default
     // Add new scripts here:
     // import myNewScript from './my-new-script';
     // myNewScript,
@@ -3276,7 +3993,8 @@ ${JSON.stringify(trimmed, null, 2)}`;
     const scriptList = scripts.map((s) => ({
       id: s.id,
       name: s.name,
-      description: s.description
+      description: s.description,
+      hasConfig: s.hasConfig || false
     }));
     figma.ui.postMessage({ type: "script-list", scripts: scriptList });
     const savedPath = await figma.clientStorage.getAsync(BASE_PATH_KEY) || "";
@@ -3289,7 +4007,7 @@ ${JSON.stringify(trimmed, null, 2)}`;
     if (msg.type === "run-script" && msg.scriptId) {
       const script = scripts.find((s) => s.id === msg.scriptId);
       if (script) {
-        Promise.resolve(script.run()).then(() => {
+        Promise.resolve(script.run(msg.options)).then(() => {
           figma.ui.postMessage({ type: "done", scriptId: script.id });
         }).catch((err) => {
           figma.notify("Error: " + (err.message || String(err)));

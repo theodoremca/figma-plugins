@@ -17,6 +17,7 @@ async function init() {
     id: s.id,
     name: s.name,
     description: s.description,
+    hasConfig: s.hasConfig || false,
   }));
   figma.ui.postMessage({ type: 'script-list', scripts: scriptList });
 
@@ -31,12 +32,12 @@ async function init() {
 init();
 
 // Handle messages from UI
-figma.ui.onmessage = (msg: { type: string; scriptId?: string; path?: string; settings?: AISettings }) => {
-  // Script execution
+figma.ui.onmessage = (msg: any) => {
+  // Script execution — may include options
   if (msg.type === 'run-script' && msg.scriptId) {
     const script = scripts.find(s => s.id === msg.scriptId);
     if (script) {
-      Promise.resolve(script.run())
+      Promise.resolve(script.run(msg.options))
         .then(() => {
           figma.ui.postMessage({ type: 'done', scriptId: script.id });
         })

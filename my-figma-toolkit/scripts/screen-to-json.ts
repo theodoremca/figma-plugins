@@ -1,6 +1,6 @@
-import { Script } from './types';
+import { Script, ScreenToJsonOptions, DEFAULT_SCREEN_TO_JSON_OPTIONS } from './types';
 import JSZip from 'jszip';
-import { enrichScreenJSON, applyEnrichment, AI_SETTINGS_KEY, DEFAULT_AI_SETTINGS } from './ai-enrich';
+import { enrichScreenJSON, enrichSingleScreen, combineScreenSummaries, applyEnrichment, AI_SETTINGS_KEY, DEFAULT_AI_SETTINGS } from './ai-enrich';
 import type { AISettings, AIUsage } from './ai-enrich';
 
 // ============================================================
@@ -106,6 +106,13 @@ interface NodeJSON {
   // Vector / Boolean
   vectorPaths?: string;
   booleanOperation?: string;
+
+  // AI enrichment (added post-hoc)
+  summary?: string;
+  semanticRole?: string;
+  screenType?: string;
+  keyElements?: string[];
+  userActions?: string[];
 
   // Children
   children?: NodeJSON[];
@@ -558,11 +565,47 @@ function patchFullPaths(nodes: NodeJSON[], fullBasePath: string): void {
   }
 }
 
+/** Strip a node JSON down to a compact summary (for compact output mode) */
+function toCompactScreen(node: NodeJSON): any {
+  const compact: any = {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    width: node.width,
+    height: node.height,
+  };
+  // Carry over key visual props only
+  if (node.fills && node.fills.length > 0) {
+    const firstSolid = node.fills.find(f => f.type === 'SOLID');
+    if (firstSolid?.color) {
+      compact.fillColor = firstSolid.color;
+    }
+  }
+  if (node.cornerRadius) compact.cornerRadius = node.cornerRadius;
+  if (node.characters) compact.text = node.characters.slice(0, 100);
+  if (node.fontFamily) compact.font = `${node.fontFamily} ${node.fontWeight || ''}`.trim();
+  if (node.fontSize) compact.fontSize = node.fontSize;
+  if (node.layoutMode && node.layoutMode !== 'NONE') compact.layout = node.layoutMode;
+  if (node.imageFiles) compact.image = node.imageFiles.png;
+  if (node.isInstance && node.componentName) compact.component = node.componentName;
+  if (node.semanticRole) compact.role = node.semanticRole;
+  if (node.summary) compact.summary = node.summary;
+  // Recursively summarize children
+  if (node.children && node.children.length > 0) {
+    compact.children = node.children.map(toCompactScreen);
+  }
+  return compact;
+}
+
 const screenToJson: Script = {
   id: 'screen-to-json',
   name: 'Screen to JSON',
   description: 'Generate a detailed AI-ready JSON from selected screens (ZIP with images)',
-  async run() {
+  hasConfig: true,
+  async run(options?: ScreenToJsonOptions) {
+    // Merge options with defaults
+    const opts: ScreenToJsonOptions = { ...DEFAULT_SCREEN_TO_JSON_OPTIONS, ...(options || {}) };
+
     const selection = figma.currentPage.selection;
 
     if (selection.length === 0) {
@@ -604,11 +647,11 @@ const screenToJson: Script = {
       patchFillImageFiles(screen);
     }
 
-    // Phase 2: Create ZIP and export images into it
+    // Phase 2: Create ZIP and (conditionally) export images
     const zip = new JSZip();
     const allExportedFiles: string[] = [];
 
-    if (imageExportTasks.length > 0) {
+    if (opts.exportImages && imageExportTasks.length > 0) {
       figma.notify(`Exporting ${imageExportTasks.length} image(s) at ${IMAGE_SCALE}x...`);
 
       for (const task of imageExportTasks) {
@@ -629,7 +672,6 @@ const screenToJson: Script = {
           zip.file(pngZipPath, pngBytes);
           zip.file(jpgZipPath, jpgBytes);
 
-          // Full paths for the JSON (basePath + zipFolder + image path)
           allExportedFiles.push(
             `${fullBasePath}/${pngZipPath}`,
             `${fullBasePath}/${jpgZipPath}`
@@ -640,8 +682,13 @@ const screenToJson: Script = {
       }
     }
 
-    // Also patch imageFiles on nodes to use full paths
-    patchFullPaths(screens, fullBasePath);
+    // Patch imageFiles on nodes to use full paths (only if images were exported)
+    if (opts.exportImages) {
+      patchFullPaths(screens, fullBasePath);
+    } else {
+      // Strip image file references if images not exported
+      stripImageFiles(screens);
+    }
 
     // Phase 3: Build reusable components map
     const reusableComponents: Record<string, { name: string; usageCount: number; firstInstanceId: string }> = {};
@@ -660,44 +707,126 @@ const screenToJson: Script = {
     let aiEnriched = false;
     let flowDescription: string | undefined;
     let sharedComponents: Array<{ name: string; description: string; foundInScreens: string[] }> | undefined;
+    const perScreenUsage: AIUsage[] = [];
+    let totalUsage: AIUsage | undefined;
 
-    if (aiSettings.enabled) {
-      figma.notify(`Analyzing with AI (${aiSettings.provider})...`);
+    if (opts.aiEnabled && aiSettings.enabled) {
       figma.ui.postMessage({ type: 'ai-status', status: 'running' });
 
-      const result = await enrichScreenJSON({ screens, reusableComponents }, aiSettings);
+      if (opts.aiMode === 'per-screen') {
+        // Per-screen mode: analyze each screen separately, then combine
+        const screenSummaryData: Array<{ name: string; summary: string; screenType: string; keyElements: string[] }> = [];
 
-      if (result) {
-        aiEnriched = true;
-        applyEnrichment(screens, result.enrichment);
-        flowDescription = result.enrichment.flowDescription;
-        sharedComponents = result.enrichment.sharedComponents;
-        figma.ui.postMessage({ type: 'ai-status', status: 'done', usage: result.usage });
+        for (let i = 0; i < screens.length; i++) {
+          const screen = screens[i];
+          figma.notify(`AI analyzing screen ${i + 1}/${screens.length}: ${screen.name}`);
+          figma.ui.postMessage({ type: 'ai-progress', current: i + 1, total: screens.length, screenName: screen.name });
+
+          const singleResult = await enrichSingleScreen(screen, aiSettings);
+          if (singleResult) {
+            (screen as any).summary = singleResult.enrichment.summary;
+            (screen as any).screenType = singleResult.enrichment.screenType;
+            (screen as any).keyElements = singleResult.enrichment.keyElements;
+            (screen as any).userActions = singleResult.enrichment.userActions;
+
+            // Apply semantic roles from this screen's enrichment
+            const applyRoles = (node: any) => {
+              if (singleResult.enrichment.semanticRoles[node.id]) {
+                node.semanticRole = singleResult.enrichment.semanticRoles[node.id];
+              }
+              if (node.children) {
+                for (const child of node.children) applyRoles(child);
+              }
+            };
+            applyRoles(screen);
+
+            perScreenUsage.push(singleResult.usage);
+            screenSummaryData.push({
+              name: screen.name,
+              summary: singleResult.enrichment.summary,
+              screenType: singleResult.enrichment.screenType,
+              keyElements: singleResult.enrichment.keyElements,
+            });
+          }
+        }
+
+        // Final combine step: overall flow analysis
+        if (screenSummaryData.length > 0) {
+          figma.notify('AI combining screens for flow analysis...');
+          const combined = await combineScreenSummaries(screenSummaryData, aiSettings);
+          if (combined) {
+            flowDescription = combined.flowDescription;
+            sharedComponents = combined.sharedComponents;
+            perScreenUsage.push(combined.usage);
+          }
+          aiEnriched = true;
+        }
+
+        // Aggregate usage
+        if (perScreenUsage.length > 0) {
+          const first = perScreenUsage[0];
+          totalUsage = {
+            provider: first.provider,
+            model: first.model,
+            promptTokens: perScreenUsage.reduce((s, u) => s + u.promptTokens, 0),
+            completionTokens: perScreenUsage.reduce((s, u) => s + u.completionTokens, 0),
+            totalTokens: perScreenUsage.reduce((s, u) => s + u.totalTokens, 0),
+            estimatedCostUSD: perScreenUsage.reduce((s, u) => s + u.estimatedCostUSD, 0),
+            durationMs: perScreenUsage.reduce((s, u) => s + u.durationMs, 0),
+          };
+          figma.ui.postMessage({ type: 'ai-status', status: 'done', usage: totalUsage });
+        } else {
+          figma.ui.postMessage({ type: 'ai-status', status: 'failed' });
+        }
       } else {
-        figma.ui.postMessage({ type: 'ai-status', status: 'failed' });
+        // Bulk mode: send everything at once (original behavior)
+        figma.notify(`Analyzing with AI (${aiSettings.provider})...`);
+
+        const result = await enrichScreenJSON({ screens, reusableComponents }, aiSettings);
+
+        if (result) {
+          aiEnriched = true;
+          applyEnrichment(screens, result.enrichment);
+          flowDescription = result.enrichment.flowDescription;
+          sharedComponents = result.enrichment.sharedComponents;
+          totalUsage = result.usage;
+          figma.ui.postMessage({ type: 'ai-status', status: 'done', usage: result.usage });
+        } else {
+          figma.ui.postMessage({ type: 'ai-status', status: 'failed' });
+        }
       }
     }
 
-    const output: ScreenJSON = {
+    // Build final output — use compact mode if requested
+    const outputScreens = opts.outputMode === 'compact'
+      ? screens.map(toCompactScreen)
+      : screens;
+
+    const output: any = {
       exportedAt: new Date().toISOString(),
       figmaFileKey: fileKey,
       exportPath: fullBasePath,
-      imageScale: IMAGE_SCALE,
-      imageFormats: ['png', 'jpeg'],
+      outputMode: opts.outputMode,
+      imageScale: opts.exportImages ? IMAGE_SCALE : undefined,
+      imageFormats: opts.exportImages ? ['png', 'jpeg'] : undefined,
       aiEnriched,
+      aiMode: opts.aiEnabled ? opts.aiMode : undefined,
       flowDescription,
       sharedComponents,
-      screens,
+      screens: outputScreens,
       reusableComponents,
-      exportedImages: allExportedFiles,
+      exportedImages: opts.exportImages ? allExportedFiles : undefined,
     };
+
+    // Remove undefined fields for clean JSON
+    Object.keys(output).forEach(k => output[k] === undefined && delete output[k]);
 
     const jsonString = JSON.stringify(output, null, 2);
 
     // Add JSON to ZIP
     zip.file('screen.json', jsonString);
 
-    // Phase 4: Generate ZIP and send to UI for single download
+    // Phase 4: Generate ZIP and send to UI
     figma.notify('Packing ZIP...');
     const zipBlob = await zip.generateAsync({ type: 'uint8array' });
 
@@ -707,23 +836,38 @@ const screenToJson: Script = {
       json: jsonString,
       screenCount: screens.length,
       componentCount: Object.keys(reusableComponents).length,
-      imageCount: imageExportTasks.length,
+      imageCount: opts.exportImages ? imageExportTasks.length : 0,
     });
 
-    // Send ZIP SECOND — so it overwrites the initial disabled state
+    // Send ZIP SECOND
     figma.ui.postMessage({
       type: 'download-zip',
       bytes: Array.from(zipBlob),
       zipFilename: `${zipFolderName}.zip`,
       screenCount: screens.length,
       componentCount: Object.keys(reusableComponents).length,
-      imageCount: imageExportTasks.length,
+      imageCount: opts.exportImages ? imageExportTasks.length : 0,
     });
 
     figma.notify(
-      `Done! ${screens.length} screen(s), ${Object.keys(reusableComponents).length} reusable component(s), ${imageExportTasks.length} image(s).`
+      `Done! ${screens.length} screen(s), ${Object.keys(reusableComponents).length} reusable, ${opts.exportImages ? imageExportTasks.length + ' image(s)' : 'no images'}.`
     );
   },
 };
+
+/** Remove image file references from nodes when images are not exported */
+function stripImageFiles(nodes: NodeJSON[]): void {
+  for (const node of nodes) {
+    delete node.imageFiles;
+    delete node.imageRef;
+    if (node.fills) {
+      for (const fill of node.fills) {
+        delete fill.imageFiles;
+        delete fill.imageRef;
+      }
+    }
+    if (node.children) stripImageFiles(node.children);
+  }
+}
 
 export default screenToJson;

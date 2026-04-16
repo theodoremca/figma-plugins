@@ -78,6 +78,14 @@
   }
   .settings-toggle input { cursor: pointer; }
   .settings-toggle span { font-size: 12px; color: #ccc; }
+  .settings-radio {
+    display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; cursor: pointer;
+    padding: 6px 8px; border-radius: 4px;
+  }
+  .settings-radio:hover { background: #333; }
+  .settings-radio input { cursor: pointer; margin-top: 2px; }
+  .settings-radio span { font-size: 11px; color: #ccc; line-height: 1.4; }
+  .settings-radio strong { color: #fff; }
   .provider-section { display: none; }
   .provider-section.active { display: block; }
   .fetch-btn {
@@ -241,6 +249,61 @@
   </div>
 </div>
 
+<!-- View: Configure Script (before running) -->
+<div class="view" id="view-config">
+  <div class="header"><span id="configTitle">Configure</span></div>
+  <div class="settings-content">
+
+    <!-- Output mode -->
+    <div class="settings-section">
+      <div class="settings-section-title">Output Mode</div>
+      <label class="settings-radio">
+        <input type="radio" name="outputMode" value="detailed" checked />
+        <span><strong>Detailed</strong> — full node properties (best for pixel-perfect code generation)</span>
+      </label>
+      <label class="settings-radio">
+        <input type="radio" name="outputMode" value="compact" />
+        <span><strong>Compact</strong> — shorter per-screen summary (smaller JSON, easier for AI)</span>
+      </label>
+    </div>
+
+    <!-- Image export -->
+    <div class="settings-section">
+      <div class="settings-section-title">Images</div>
+      <label class="settings-toggle">
+        <input type="checkbox" id="cfgExportImages" checked />
+        <span>Export images (PNG + JPEG @ 1.5x) into ZIP</span>
+      </label>
+    </div>
+
+    <!-- AI mode -->
+    <div class="settings-section">
+      <div class="settings-section-title">AI Analysis</div>
+      <label class="settings-toggle">
+        <input type="checkbox" id="cfgAiEnabled" />
+        <span>Run AI enrichment on this export</span>
+      </label>
+      <div id="cfgAiModeWrap" style="display:none; margin-top: 8px;">
+        <label class="settings-radio">
+          <input type="radio" name="aiMode" value="per-screen" checked />
+          <span><strong>Per-screen</strong> — analyzes each screen separately + final flow combine (slower, more accurate)</span>
+        </label>
+        <label class="settings-radio">
+          <input type="radio" name="aiMode" value="bulk" />
+          <span><strong>Bulk</strong> — sends all screens in one request (faster, may truncate)</span>
+        </label>
+      </div>
+      <div class="settings-hint" id="cfgAiWarning" style="display:none; color:#f5a623; margin-top:6px">
+        AI is disabled globally. Go to Settings → AI Enrichment to enable it first.
+      </div>
+    </div>
+  </div>
+  <div class="settings-actions">
+    <button class="save-btn" id="startRunBtn">Start Export</button>
+    <button class="cancel-btn" id="cancelRunBtn">Cancel</button>
+  </div>
+</div>
+
 <!-- View: JSON Output -->
 <div class="view" id="view-json">
   <div class="header">
@@ -273,6 +336,14 @@ const status = document.getElementById('status');
 const viewList = document.getElementById('view-list');
 const viewJson = document.getElementById('view-json');
 const viewSettings = document.getElementById('view-settings');
+const viewConfig = document.getElementById('view-config');
+const configTitle = document.getElementById('configTitle');
+const cfgExportImages = document.getElementById('cfgExportImages');
+const cfgAiEnabled = document.getElementById('cfgAiEnabled');
+const cfgAiModeWrap = document.getElementById('cfgAiModeWrap');
+const cfgAiWarning = document.getElementById('cfgAiWarning');
+const startRunBtn = document.getElementById('startRunBtn');
+const cancelRunBtn = document.getElementById('cancelRunBtn');
 const jsonPre = document.getElementById('jsonPre');
 const jsonStats = document.getElementById('jsonStats');
 const copyBtn = document.getElementById('copyBtn');
@@ -322,6 +393,7 @@ function showView(name) {
   viewList.className = 'view' + (name === 'list' ? ' active' : '');
   viewJson.className = 'view' + (name === 'json' ? ' active' : '');
   viewSettings.className = 'view' + (name === 'settings' ? ' active' : '');
+  viewConfig.className = 'view' + (name === 'config' ? ' active' : '');
 }
 
 function showStatus(text, isError, isAi) {
@@ -361,11 +433,39 @@ function renderScripts(scripts) {
       </div>
     `;
     item.addEventListener('click', () => {
-      parent.postMessage({ pluginMessage: { type: 'run-script', scriptId: s.id } }, '*');
+      if (s.hasConfig) {
+        // Show config view first
+        pendingScriptId = s.id;
+        configTitle.textContent = 'Configure: ' + s.name;
+        updateConfigAiSection();
+        showView('config');
+      } else {
+        parent.postMessage({ pluginMessage: { type: 'run-script', scriptId: s.id } }, '*');
+      }
     });
     list.appendChild(item);
   });
 }
+
+let pendingScriptId = null;
+
+function updateConfigAiSection() {
+  // Show warning if AI is globally disabled
+  const aiGlobalEnabled = savedAiSettings && savedAiSettings.enabled;
+  if (!aiGlobalEnabled) {
+    cfgAiEnabled.checked = false;
+    cfgAiEnabled.disabled = true;
+    cfgAiWarning.style.display = 'block';
+    cfgAiModeWrap.style.display = 'none';
+  } else {
+    cfgAiEnabled.disabled = false;
+    cfgAiWarning.style.display = 'none';
+    cfgAiModeWrap.style.display = cfgAiEnabled.checked ? 'block' : 'none';
+  }
+}
+
+// Toggle AI mode section when AI checkbox flips
+document.addEventListener('DOMContentLoaded', () => {});
 
 // ---- Settings UI logic ----
 function loadSettingsUI() {
@@ -471,6 +571,34 @@ backBtn.addEventListener('click', () => {
   showView('list');
 });
 
+// ---- Config view handlers ----
+cfgAiEnabled.addEventListener('change', () => {
+  cfgAiModeWrap.style.display = cfgAiEnabled.checked ? 'block' : 'none';
+});
+
+cancelRunBtn.addEventListener('click', () => {
+  pendingScriptId = null;
+  showView('list');
+});
+
+startRunBtn.addEventListener('click', () => {
+  if (!pendingScriptId) return;
+  const outputMode = document.querySelector('input[name="outputMode"]:checked').value;
+  const aiMode = document.querySelector('input[name="aiMode"]:checked').value;
+  const options = {
+    exportImages: cfgExportImages.checked,
+    outputMode: outputMode,
+    aiEnabled: cfgAiEnabled.checked,
+    aiMode: aiMode,
+  };
+  parent.postMessage({
+    pluginMessage: { type: 'run-script', scriptId: pendingScriptId, options }
+  }, '*');
+  const id = pendingScriptId;
+  pendingScriptId = null;
+  showStatus('Running ' + id + '...', false, false);
+});
+
 // ---- Message handler ----
 onmessage = (event) => {
   const msg = event.data.pluginMessage;
@@ -568,6 +696,11 @@ onmessage = (event) => {
       aiUsageBar.className = 'ai-usage-bar visible';
     }
     if (msg.status === 'failed') showStatus('AI enrichment failed (exported without AI)', true, false);
+  }
+
+  // AI per-screen progress
+  if (msg.type === 'ai-progress') {
+    showStatus('AI: screen ' + msg.current + '/' + msg.total + ' — ' + msg.screenName, false, true);
   }
 
   // ZIP ready
