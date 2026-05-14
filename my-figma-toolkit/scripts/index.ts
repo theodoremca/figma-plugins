@@ -12,12 +12,16 @@ import squareToCircle from './square-to-circle';
 import thinkingDiv from './thinking-div';
 import screenToJson from './screen-to-json';
 import projectBlueprint from './project-blueprint';
+import claudeTest from './claude-test';
+import importDesign from './import-design';
 
 export const scripts: Script[] = [
   squareToCircle,
   thinkingDiv,
   screenToJson,
   projectBlueprint,
+  importDesign,
+  claudeTest,
   // Add new scripts here:
   // import myNewScript from './my-new-script';
   // myNewScript,

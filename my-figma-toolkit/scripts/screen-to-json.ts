@@ -2,6 +2,7 @@ import { Script, ScreenToJsonOptions, DEFAULT_SCREEN_TO_JSON_OPTIONS } from './t
 import JSZip from 'jszip';
 import { enrichScreenJSON, enrichSingleScreen, combineScreenSummaries, applyEnrichment, AI_SETTINGS_KEY, DEFAULT_AI_SETTINGS } from './ai-enrich';
 import type { AISettings, AIUsage } from './ai-enrich';
+import { buildModeTransform } from './build-mode-transformer';
 
 // ============================================================
 // Screen to JSON — Extracts a detailed JSON blueprint from
@@ -11,12 +12,11 @@ import type { AISettings, AIUsage } from './ai-enrich';
 //   figma-export.zip
 //     ├── screen.json          (the full JSON blueprint)
 //     └── images/
-//         ├── avatar-12-34@1.5x.png
-//         ├── avatar-12-34@1.5x.jpg
+//         ├── avatar-12-34.png
 //         └── ...
 //
 // ONE save dialog. Unzip and you have everything.
-// JSON references images as: "images/avatar-12-34@1.5x.png"
+// Images exported as PNG only at 1x scale.
 // ============================================================
 
 interface NodeJSON {
@@ -88,13 +88,13 @@ interface NodeJSON {
   textCase?: string;
   paragraphSpacing?: number;
 
-  // AI enrichment (optional)
-  summary?: string;
-  semanticRole?: string;
-
   // Image — paths relative to the ZIP root
   imageRef?: string;
-  imageFiles?: { png: string; jpeg: string };
+  imageFile?: string;  // path to PNG
+
+  // Icon from a recognized library (no image needed, AI can use icon package)
+  iconLibrary?: string;  // e.g. "feather", "vuesax", "lucide", "material", "heroicons", "ionicons"
+  iconName?: string;     // e.g. "bell", "home-2", "chevron-right"
 
   // Component info
   isComponent?: boolean;
@@ -107,7 +107,7 @@ interface NodeJSON {
   vectorPaths?: string;
   booleanOperation?: string;
 
-  // AI enrichment (added post-hoc)
+  // AI enrichment (added post-hoc, per-screen mode)
   summary?: string;
   semanticRole?: string;
   screenType?: string;
@@ -128,7 +128,7 @@ interface SerializedPaint {
   gradientTransform?: number[][];
   scaleMode?: string;
   imageRef?: string;
-  imageFiles?: { png: string; jpeg: string };
+  imageFile?: string;  // path to PNG
 }
 
 interface SerializedEffect {
@@ -163,7 +163,7 @@ interface ImageExportTask {
 
 // ---- Helpers ----
 
-const IMAGE_SCALE = 1.5;
+const IMAGE_SCALE = 1;
 const IMAGES_FOLDER = 'images';
 const CLIENT_STORAGE_KEY = 'screen-to-json-base-path';
 
@@ -194,9 +194,97 @@ function safeFilename(name: string, nodeId: string): string {
   return `${clean}-${idSuffix}`;
 }
 
+/** Known icon library prefixes Figma users commonly name icons with */
+const KNOWN_ICON_LIBRARIES = new Set([
+  'feather', 'feathericons',
+  'vuesax', 'iconsax',
+  'lucide',
+  'material', 'material-symbols', 'material-icons', 'mui',
+  'heroicons',
+  'ionicons', 'ion',
+  'fontawesome', 'fa', 'fa-solid', 'fa-regular', 'fa-brands',
+  'phosphor',
+  'tabler',
+  'bootstrap', 'bi',
+  'antd',
+  'remix',
+  'iconpark',
+  'octicons',
+  'ri',
+]);
+
+/**
+ * Try detecting icon library from node name or any ancestor's name
+ * (icons are often children of a parent frame named "feather/bell" etc.)
+ */
+function detectIconLibraryFromChain(names: string[]): { library: string; iconName: string } | null {
+  for (const n of names) {
+    const hit = detectIconLibrary(n);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** A node is "likely an icon" if small, or named with a known library prefix */
+function isLikelyIcon(node: SceneNode, ancestorNames: string[]): boolean {
+  // Library-named → definitely an icon
+  if (detectIconLibraryFromChain([node.name, ...ancestorNames])) return true;
+  // Small square-ish size → likely an icon
+  const w = (node as any).width || 0;
+  const h = (node as any).height || 0;
+  if (w > 0 && w <= 48 && h > 0 && h <= 48 && Math.abs(w - h) < 8) return true;
+  // Named "icon" → likely an icon
+  if (/\bicon\b/i.test(node.name)) return true;
+  return false;
+}
+
+/**
+ * Detect if a node's name looks like an icon library reference
+ * (e.g., "feather/bell", "vuesax/cards", "lucide/home-2", "icon/material/search")
+ */
+function detectIconLibrary(name: string): { library: string; iconName: string } | null {
+  const normalized = name.trim().toLowerCase();
+
+  // Common patterns: "lib/icon", "icon/lib/name", "Icon/lib/name"
+  const parts = normalized.split(/[\/\\]/).map(p => p.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+
+  // Strip leading "icon" / "icons" prefix if present
+  if (parts[0] === 'icon' || parts[0] === 'icons') parts.shift();
+  if (parts.length < 2) return null;
+
+  const first = parts[0];
+  if (!KNOWN_ICON_LIBRARIES.has(first)) return null;
+
+  // Rejoin the rest as the icon name (handles nested like "lucide/chevron/right")
+  const iconName = parts.slice(1).join('/');
+  if (!iconName) return null;
+
+  // Normalize common aliases to canonical library names
+  const libraryAlias: Record<string, string> = {
+    'feathericons': 'feather',
+    'iconsax': 'vuesax',
+    'material-icons': 'material',
+    'material-symbols': 'material',
+    'mui': 'material',
+    'ion': 'ionicons',
+    'fa': 'fontawesome',
+    'fa-solid': 'fontawesome',
+    'fa-regular': 'fontawesome',
+    'fa-brands': 'fontawesome',
+    'bi': 'bootstrap',
+    'ri': 'remix',
+  };
+  const library = libraryAlias[first] || first;
+
+  return { library, iconName };
+}
+
 /** Path inside the ZIP for an image file */
 function zipImagePath(baseName: string, ext: string): string {
-  return `${IMAGES_FOLDER}/${baseName}@1.5x.${ext}`;
+  // At 1x scale, no suffix. At other scales, append @{scale}x (e.g., @2x)
+  const scaleSuffix = IMAGE_SCALE === 1 ? '' : `@${IMAGE_SCALE}x`;
+  return `${IMAGES_FOLDER}/${baseName}${scaleSuffix}.${ext}`;
 }
 
 function serializePaint(paint: Paint, _fileKey: string): SerializedPaint {
@@ -270,10 +358,10 @@ const componentUsageMap = new Map<string, { name: string; count: number; firstIn
 
 // Collect nodes that need image export
 const imageExportTasks: ImageExportTask[] = [];
-// Map from imageRef (hash or nodeId) to the generated filenames inside the ZIP
-const imageFileMap = new Map<string, { png: string; jpeg: string }>();
+// Map from dedup-key (imageHash | mainComponent.id | nodeId) to the generated PNG filename inside the ZIP
+const imageFileMap = new Map<string, string>();
 
-function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
+function traverseNode(node: SceneNode, fileKey: string, ancestorNames: string[] = []): NodeJSON {
   const json: NodeJSON = {
     id: node.id,
     name: node.name,
@@ -479,14 +567,11 @@ function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
         // Check if we already queued this hash (same image used on multiple nodes)
         if (!imageFileMap.has(fill.imageHash)) {
           const baseName = safeFilename(node.name, node.id);
-          imageFileMap.set(fill.imageHash, {
-            png: zipImagePath(baseName, 'png'),
-            jpeg: zipImagePath(baseName, 'jpg'),
-          });
+          imageFileMap.set(fill.imageHash, zipImagePath(baseName, 'png'));
           imageExportTasks.push({ nodeId: node.id, node, baseName });
         }
 
-        json.imageFiles = imageFileMap.get(fill.imageHash);
+        json.imageFile = imageFileMap.get(fill.imageHash);
         break;
       }
     }
@@ -499,25 +584,45 @@ function traverseNode(node: SceneNode, fileKey: string): NodeJSON {
       node.type === 'BOOLEAN_OPERATION' ||
       node.type === 'STAR' ||
       node.type === 'POLYGON' ||
-      node.type === 'LINE')
+      node.type === 'LINE' ||
+      // Component instances that look like icons (small, or named with icon library prefix)
+      (node.type === 'INSTANCE' && isLikelyIcon(node, ancestorNames)))
   ) {
-    const baseName = safeFilename(node.name, node.id);
-    const files = {
-      png: zipImagePath(baseName, 'png'),
-      jpeg: zipImagePath(baseName, 'jpg'),
-    };
-    imageFileMap.set(node.id, files);
-    imageExportTasks.push({ nodeId: node.id, node, baseName });
-    json.imageFiles = files;
+    // Step 1: Check if this is a known-library icon (e.g., "feather/bell")
+    const iconInfo = detectIconLibraryFromChain([node.name, ...ancestorNames]);
+    if (iconInfo) {
+      // Known icon → no export needed. AI can use the icon package.
+      json.iconLibrary = iconInfo.library;
+      json.iconName = iconInfo.iconName;
+    } else {
+      // Step 2: Dedup key priority — component main id > imageHash > node id
+      let dedupKey = node.id;
+      if (node.type === 'INSTANCE') {
+        const mainId = (node as InstanceNode).mainComponent?.id;
+        if (mainId) dedupKey = `component:${mainId}`;
+      }
+
+      if (imageFileMap.has(dedupKey)) {
+        // Already queued — reuse the existing file path
+        json.imageFile = imageFileMap.get(dedupKey);
+      } else {
+        const baseName = safeFilename(node.name, node.id);
+        const file = zipImagePath(baseName, 'png');
+        imageFileMap.set(dedupKey, file);
+        imageExportTasks.push({ nodeId: node.id, node, baseName });
+        json.imageFile = file;
+      }
+    }
   }
 
-  // Traverse children
+  // Traverse children — pass ancestor name chain so children can see parent library names
   if ('children' in node) {
     const childNodes = (node as FrameNode).children;
     if (childNodes && childNodes.length > 0) {
+      const nextAncestors = [node.name, ...ancestorNames].slice(0, 5); // cap depth
       json.children = childNodes
         .filter(child => child.visible)
-        .map(child => traverseNode(child, fileKey));
+        .map(child => traverseNode(child, fileKey, nextAncestors));
     }
   }
 
@@ -529,7 +634,7 @@ function patchFillImageFiles(json: NodeJSON): void {
   if (json.fills) {
     for (const fill of json.fills) {
       if (fill.imageRef && imageFileMap.has(fill.imageRef)) {
-        fill.imageFiles = imageFileMap.get(fill.imageRef);
+        fill.imageFile = imageFileMap.get(fill.imageRef);
       }
     }
   }
@@ -540,22 +645,16 @@ function patchFillImageFiles(json: NodeJSON): void {
   }
 }
 
-/** Rewrite all imageFiles paths to full absolute paths */
+/** Rewrite all imageFile paths to full absolute paths */
 function patchFullPaths(nodes: NodeJSON[], fullBasePath: string): void {
   for (const node of nodes) {
-    if (node.imageFiles) {
-      node.imageFiles = {
-        png: `${fullBasePath}/${node.imageFiles.png}`,
-        jpeg: `${fullBasePath}/${node.imageFiles.jpeg}`,
-      };
+    if (node.imageFile) {
+      node.imageFile = `${fullBasePath}/${node.imageFile}`;
     }
     if (node.fills) {
       for (const fill of node.fills) {
-        if (fill.imageFiles) {
-          fill.imageFiles = {
-            png: `${fullBasePath}/${fill.imageFiles.png}`,
-            jpeg: `${fullBasePath}/${fill.imageFiles.jpeg}`,
-          };
+        if (fill.imageFile) {
+          fill.imageFile = `${fullBasePath}/${fill.imageFile}`;
         }
       }
     }
@@ -563,6 +662,73 @@ function patchFullPaths(nodes: NodeJSON[], fullBasePath: string): void {
       patchFullPaths(node.children, fullBasePath);
     }
   }
+}
+
+/** Heuristic classifier — infers semantic role from layer name + Figma type */
+function classifyNode(node: NodeJSON): string {
+  const lower = node.name.toLowerCase();
+
+  // Text always wins
+  if (node.type === 'TEXT') return 'text';
+
+  // Name-based classification (most reliable for well-named Figma files)
+  if (/\b(input|field|textfield|text\s*field|textbox)\b/.test(lower)) return 'input';
+  if (/\bsearch\b/.test(lower)) return 'input:search';
+  if (/\b(button|btn|cta)\b/.test(lower)) return 'button';
+  if (/\b(checkbox|radio|toggle|switch)\b/.test(lower)) return 'toggle';
+  if (/\b(list|feed|table)\b/.test(lower)) return 'list';
+  if (/\b(card|tile)\b/.test(lower)) return 'card';
+  if (/\b(list\s*item|row|cell)\b/.test(lower)) return 'list-item';
+  if (/\b(modal|dialog|sheet|popup|drawer)\b/.test(lower)) return 'modal';
+  if (/\b(nav|navigation|tab\s*bar|bottom\s*bar|header|app\s*bar|status\s*bar)\b/.test(lower)) return 'navigation';
+  if (/\b(icon)\b/.test(lower)) return 'icon';
+  if (/\b(avatar|profile\s*pic|profile\s*image|thumbnail|photo|picture|image)\b/.test(lower)) return 'image';
+  if (/\b(chip|tag|badge|pill)\b/.test(lower)) return 'chip';
+  if (/\b(link)\b/.test(lower)) return 'link';
+  if (/\b(divider|separator|line)\b/.test(lower)) return 'divider';
+
+  // Image-fill detection
+  if (node.imageRef || (node.fills && node.fills.some(f => f.type === 'IMAGE'))) return 'image';
+
+  // Shape types become icons/images
+  if (node.type === 'VECTOR' || node.type === 'BOOLEAN_OPERATION' || node.type === 'STAR' || node.type === 'POLYGON') return 'icon';
+  if (node.type === 'ELLIPSE') return 'icon';
+
+  // Component instance — preserve reference
+  if (node.isInstance && node.componentName) return 'component';
+
+  return 'container';
+}
+
+/** Minimal backend-oriented representation. Strips ALL visuals (colors, fonts, spacing, padding). */
+function toBackendNode(node: NodeJSON): any {
+  const type = classifyNode(node);
+
+  // Skip pure decorative shapes that add noise (lines, tiny rectangles with no children)
+  if (type === 'divider') return null;
+
+  const out: any = {
+    name: node.name,
+    type,
+  };
+
+  // Keep text content verbatim — this is gold for backend (labels, placeholders, button text)
+  if (node.characters) out.text = node.characters;
+
+  // Component references matter for backend (reusable patterns)
+  if (node.isInstance && node.componentName) {
+    out.component = node.componentName;
+  }
+
+  // Traverse children but filter nulls (dropped dividers etc.)
+  if (node.children && node.children.length > 0) {
+    const transformed = node.children
+      .map(toBackendNode)
+      .filter(c => c !== null);
+    if (transformed.length > 0) out.children = transformed;
+  }
+
+  return out;
 }
 
 /** Strip a node JSON down to a compact summary (for compact output mode) */
@@ -586,7 +752,8 @@ function toCompactScreen(node: NodeJSON): any {
   if (node.fontFamily) compact.font = `${node.fontFamily} ${node.fontWeight || ''}`.trim();
   if (node.fontSize) compact.fontSize = node.fontSize;
   if (node.layoutMode && node.layoutMode !== 'NONE') compact.layout = node.layoutMode;
-  if (node.imageFiles) compact.image = node.imageFiles.png;
+  if (node.iconLibrary && node.iconName) compact.icon = `${node.iconLibrary}/${node.iconName}`;
+  else if (node.imageFile) compact.image = node.imageFile;
   if (node.isInstance && node.componentName) compact.component = node.componentName;
   if (node.semanticRole) compact.role = node.semanticRole;
   if (node.summary) compact.summary = node.summary;
@@ -651,6 +818,11 @@ const screenToJson: Script = {
     const zip = new JSZip();
     const allExportedFiles: string[] = [];
 
+    // Track byte hash -> canonical zip path so we can dedup identical renders
+    const byteHashToPath = new Map<string, string>();
+    // Remap: task.baseName -> canonical path (if this task's bytes matched an earlier one)
+    const pathRemap = new Map<string, string>();
+
     if (opts.exportImages && imageExportTasks.length > 0) {
       figma.notify(`Exporting ${imageExportTasks.length} image(s) at ${IMAGE_SCALE}x...`);
 
@@ -661,24 +833,33 @@ const screenToJson: Script = {
             constraint: { type: 'SCALE', value: IMAGE_SCALE },
           });
 
-          const jpgBytes = await task.node.exportAsync({
-            format: 'JPG',
-            constraint: { type: 'SCALE', value: IMAGE_SCALE },
-          });
-
           const pngZipPath = zipImagePath(task.baseName, 'png');
-          const jpgZipPath = zipImagePath(task.baseName, 'jpg');
+          const hash = hashBytes(pngBytes);
 
-          zip.file(pngZipPath, pngBytes);
-          zip.file(jpgZipPath, jpgBytes);
-
-          allExportedFiles.push(
-            `${fullBasePath}/${pngZipPath}`,
-            `${fullBasePath}/${jpgZipPath}`
-          );
+          if (byteHashToPath.has(hash)) {
+            // Duplicate! Skip writing, remap references to the original file
+            const canonical = byteHashToPath.get(hash)!;
+            pathRemap.set(pngZipPath, canonical);
+          } else {
+            byteHashToPath.set(hash, pngZipPath);
+            zip.file(pngZipPath, pngBytes);
+            allExportedFiles.push(`${fullBasePath}/${pngZipPath}`);
+          }
         } catch (err: any) {
           console.error(`Failed to export ${task.baseName}:`, err);
         }
+      }
+
+      // Apply path remaps to the JSON
+      if (pathRemap.size > 0) {
+        // Update imageFileMap entries so downstream patching picks up canonical paths
+        for (const [key, val] of imageFileMap.entries()) {
+          if (pathRemap.has(val)) {
+            imageFileMap.set(key, pathRemap.get(val)!);
+          }
+        }
+        // Also walk the already-built screens JSON to remap any direct imageFile refs
+        remapImagePaths(screens, pathRemap);
       }
     }
 
@@ -710,7 +891,8 @@ const screenToJson: Script = {
     const perScreenUsage: AIUsage[] = [];
     let totalUsage: AIUsage | undefined;
 
-    if (opts.aiEnabled && aiSettings.enabled) {
+    // Backend mode is handled later (deterministic, no AI) — skip AI enrichment entirely for it
+    if (opts.outputMode !== 'backend' && opts.aiEnabled && aiSettings.enabled) {
       figma.ui.postMessage({ type: 'ai-status', status: 'running' });
 
       if (opts.aiMode === 'per-screen') {
@@ -797,26 +979,55 @@ const screenToJson: Script = {
       }
     }
 
-    // Build final output — use compact mode if requested
-    const outputScreens = opts.outputMode === 'compact'
-      ? screens.map(toCompactScreen)
-      : screens;
+    // Build final output based on mode
+    let output: any;
 
-    const output: any = {
-      exportedAt: new Date().toISOString(),
-      figmaFileKey: fileKey,
-      exportPath: fullBasePath,
-      outputMode: opts.outputMode,
-      imageScale: opts.exportImages ? IMAGE_SCALE : undefined,
-      imageFormats: opts.exportImages ? ['png', 'jpeg'] : undefined,
-      aiEnriched,
-      aiMode: opts.aiEnabled ? opts.aiMode : undefined,
-      flowDescription,
-      sharedComponents,
-      screens: outputScreens,
-      reusableComponents,
-      exportedImages: opts.exportImages ? allExportedFiles : undefined,
-    };
+    if (opts.outputMode === 'backend') {
+      // Backend mode: minimal deterministic extraction (no AI)
+      // Strips all visual/styling info. Keeps only what a backend dev needs:
+      // layer names, text content, semantic classification, hierarchy
+      const backendScreens = screens.map(toBackendNode);
+      output = {
+        exportedAt: new Date().toISOString(),
+        figmaFileKey: fileKey,
+        outputMode: 'backend',
+        note: 'Minimal structural extraction. Feed this to your own AI to analyze backend requirements.',
+        screens: backendScreens,
+      };
+    } else if (opts.outputMode === 'detailed') {
+      // Detailed mode: minimal, token-referenced, semantic JSON (build-ready)
+      const built = buildModeTransform(screens as any[]);
+      output = built;
+      // Attach optional AI-generated insights if present (kept OUT of each node)
+      if (aiEnriched) {
+        (output as any).aiInsights = {
+          flowDescription,
+          sharedComponents,
+        };
+      }
+      if (opts.exportImages && allExportedFiles.length > 0) {
+        (output as any).exportedImages = allExportedFiles;
+      }
+    } else {
+      // Compact mode (old behaviour)
+      const outputScreens = screens.map(toCompactScreen);
+
+      output = {
+        exportedAt: new Date().toISOString(),
+        figmaFileKey: fileKey,
+        exportPath: fullBasePath,
+        outputMode: opts.outputMode,
+        imageScale: opts.exportImages ? IMAGE_SCALE : undefined,
+        imageFormat: opts.exportImages ? 'png' : undefined,
+        aiEnriched,
+        aiMode: opts.aiEnabled ? opts.aiMode : undefined,
+        flowDescription,
+        sharedComponents,
+        screens: outputScreens,
+        reusableComponents,
+        exportedImages: opts.exportImages ? allExportedFiles : undefined,
+      };
+    }
 
     // Remove undefined fields for clean JSON
     Object.keys(output).forEach(k => output[k] === undefined && delete output[k]);
@@ -840,10 +1051,15 @@ const screenToJson: Script = {
     });
 
     // Send ZIP SECOND
+    const zipName = opts.outputMode === 'backend'
+      ? `${zipFolderName}-backend.zip`
+      : opts.outputMode === 'compact'
+        ? `${zipFolderName}-compact.zip`
+        : `${zipFolderName}.zip`;
     figma.ui.postMessage({
       type: 'download-zip',
       bytes: Array.from(zipBlob),
-      zipFilename: `${zipFolderName}.zip`,
+      zipFilename: zipName,
       screenCount: screens.length,
       componentCount: Object.keys(reusableComponents).length,
       imageCount: opts.exportImages ? imageExportTasks.length : 0,
@@ -855,14 +1071,50 @@ const screenToJson: Script = {
   },
 };
 
+/**
+ * Fast non-cryptographic hash for byte arrays (FNV-1a 64-bit).
+ * Collisions are astronomically unlikely for our use case (rendered PNG dedup).
+ */
+function hashBytes(bytes: Uint8Array): string {
+  // FNV-1a 64-bit
+  let hi = 0xcbf29ce4;
+  let lo = 0x84222325;
+  for (let i = 0; i < bytes.length; i++) {
+    lo ^= bytes[i];
+    // 64-bit FNV prime multiplication: 0x100000001b3
+    const hiNew = (hi * 0x01000001 + lo * 0x00000000) >>> 0;
+    const loNew = (lo * 0x000001b3) >>> 0;
+    hi = hiNew;
+    lo = loNew;
+  }
+  return `${hi.toString(16).padStart(8, '0')}${lo.toString(16).padStart(8, '0')}`;
+}
+
+/** Walk the JSON and remap any imageFile path that matches a key in pathRemap */
+function remapImagePaths(nodes: NodeJSON[], pathRemap: Map<string, string>): void {
+  for (const node of nodes) {
+    if (node.imageFile && pathRemap.has(node.imageFile)) {
+      node.imageFile = pathRemap.get(node.imageFile)!;
+    }
+    if (node.fills) {
+      for (const fill of node.fills) {
+        if (fill.imageFile && pathRemap.has(fill.imageFile)) {
+          fill.imageFile = pathRemap.get(fill.imageFile)!;
+        }
+      }
+    }
+    if (node.children) remapImagePaths(node.children, pathRemap);
+  }
+}
+
 /** Remove image file references from nodes when images are not exported */
 function stripImageFiles(nodes: NodeJSON[]): void {
   for (const node of nodes) {
-    delete node.imageFiles;
+    delete node.imageFile;
     delete node.imageRef;
     if (node.fills) {
       for (const fill of node.fills) {
-        delete fill.imageFiles;
+        delete fill.imageFile;
         delete fill.imageRef;
       }
     }

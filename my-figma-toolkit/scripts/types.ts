@@ -8,8 +8,8 @@ export interface Script {
 }
 
 export interface ScreenToJsonOptions {
-  exportImages: boolean;       // export PNG+JPEG images
-  outputMode: 'detailed' | 'compact';  // full JSON vs compact summary
+  exportImages: boolean;       // export PNG images
+  outputMode: 'detailed' | 'compact' | 'backend';  // full JSON / compact / backend spec
   aiEnabled: boolean;           // run AI enrichment
   aiMode: 'bulk' | 'per-screen'; // send all at once vs per-screen + combine
 }

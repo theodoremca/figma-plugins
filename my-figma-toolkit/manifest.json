@@ -8,8 +8,9 @@
   "networkAccess": {
     "allowedDomains": [
       "https://generativelanguage.googleapis.com",
-      "http://localhost:11434"
+      "http://localhost:11434",
+      "http://localhost:11437"
     ],
-    "reasoning": "AI enrichment: Ollama (localhost) for local inference and Gemini (cloud) for semantic analysis of screen exports."
+    "reasoning": "AI enrichment: Ollama (localhost:11434), Claude bridge (localhost:11437), and Gemini (cloud) for semantic analysis of screen exports."
   }
 }

@@ -254,47 +254,79 @@
   <div class="header"><span id="configTitle">Configure</span></div>
   <div class="settings-content">
 
-    <!-- Output mode -->
-    <div class="settings-section">
-      <div class="settings-section-title">Output Mode</div>
-      <label class="settings-radio">
-        <input type="radio" name="outputMode" value="detailed" checked />
-        <span><strong>Detailed</strong> — full node properties (best for pixel-perfect code generation)</span>
-      </label>
-      <label class="settings-radio">
-        <input type="radio" name="outputMode" value="compact" />
-        <span><strong>Compact</strong> — shorter per-screen summary (smaller JSON, easier for AI)</span>
-      </label>
-    </div>
-
-    <!-- Image export -->
-    <div class="settings-section">
-      <div class="settings-section-title">Images</div>
-      <label class="settings-toggle">
-        <input type="checkbox" id="cfgExportImages" checked />
-        <span>Export images (PNG + JPEG @ 1.5x) into ZIP</span>
-      </label>
-    </div>
-
-    <!-- AI mode -->
-    <div class="settings-section">
-      <div class="settings-section-title">AI Analysis</div>
-      <label class="settings-toggle">
-        <input type="checkbox" id="cfgAiEnabled" />
-        <span>Run AI enrichment on this export</span>
-      </label>
-      <div id="cfgAiModeWrap" style="display:none; margin-top: 8px;">
+    <!-- Screen-to-JSON options (shown only for that script) -->
+    <div id="cfgScreenToJsonOptions">
+      <!-- Output mode -->
+      <div class="settings-section">
+        <div class="settings-section-title">Output Mode</div>
         <label class="settings-radio">
-          <input type="radio" name="aiMode" value="per-screen" checked />
-          <span><strong>Per-screen</strong> — analyzes each screen separately + final flow combine (slower, more accurate)</span>
+          <input type="radio" name="outputMode" value="detailed" checked />
+          <span><strong>Detailed (build)</strong> — clean build-ready JSON with design tokens, semantic types, CSS shortcuts. Best for frontend code generation.</span>
         </label>
         <label class="settings-radio">
-          <input type="radio" name="aiMode" value="bulk" />
-          <span><strong>Bulk</strong> — sends all screens in one request (faster, may truncate)</span>
+          <input type="radio" name="outputMode" value="compact" />
+          <span><strong>Compact</strong> — shorter per-screen summary, smaller JSON</span>
+        </label>
+        <label class="settings-radio">
+          <input type="radio" name="outputMode" value="backend" />
+          <span><strong>Backend</strong> — minimal structural extraction (layer names, text, inputs, buttons, lists). No styling. No AI. Feed to your own AI for backend planning.</span>
         </label>
       </div>
-      <div class="settings-hint" id="cfgAiWarning" style="display:none; color:#f5a623; margin-top:6px">
-        AI is disabled globally. Go to Settings → AI Enrichment to enable it first.
+
+      <!-- Image export -->
+      <div class="settings-section">
+        <div class="settings-section-title">Images</div>
+        <label class="settings-toggle">
+          <input type="checkbox" id="cfgExportImages" checked />
+          <span>Export images (PNG @ 1x) into ZIP</span>
+        </label>
+      </div>
+
+      <!-- AI mode -->
+      <div class="settings-section">
+        <div class="settings-section-title">AI Analysis</div>
+        <label class="settings-toggle">
+          <input type="checkbox" id="cfgAiEnabled" />
+          <span>Run AI enrichment on this export</span>
+        </label>
+        <div id="cfgAiModeWrap" style="display:none; margin-top: 8px;">
+          <label class="settings-radio">
+            <input type="radio" name="aiMode" value="per-screen" checked />
+            <span><strong>Per-screen</strong> — analyzes each screen separately + final flow combine (slower, more accurate)</span>
+          </label>
+          <label class="settings-radio">
+            <input type="radio" name="aiMode" value="bulk" />
+            <span><strong>Bulk</strong> — sends all screens in one request (faster, may truncate)</span>
+          </label>
+        </div>
+        <div class="settings-hint" id="cfgAiWarning" style="display:none; color:#f5a623; margin-top:6px">
+          AI is disabled globally. Go to Settings → AI Enrichment to enable it first.
+        </div>
+      </div>
+    </div>
+
+    <!-- Import-design options (shown only for that script) -->
+    <div id="cfgImportDesignOptions" style="display:none">
+      <div class="settings-section">
+        <div class="settings-section-title">Paste your Figma JSON</div>
+        <div class="settings-hint" style="margin-bottom: 6px;">
+          The JSON must follow <code>spec/figma-json-spec.md</code>. Generate it with Claude
+          or hand-author. Drag a .json file onto the box, or paste below.
+        </div>
+        <textarea id="importJsonInput"
+          spellcheck="false"
+          placeholder='{"meta":{"version":1},"tokens":{...},"screens":[...]}'
+          style="width:100%; min-height: 280px; padding: 10px; background: #1e1e1e; border: 1px solid #444; border-radius: 6px; color: #e8e8e8; font-family: 'SF Mono', monospace; font-size: 11px; line-height: 1.45; outline: none; resize: vertical;"
+        ></textarea>
+        <div class="settings-hint" id="importJsonStatus" style="margin-top:6px; color:#777;">
+          0 bytes
+        </div>
+        <div style="display:flex; gap: 8px; margin-top: 8px;">
+          <button class="cancel-btn" id="loadJsonFileBtn">Load .json file…</button>
+          <button class="cancel-btn" id="loadLastJsonBtn">Reload last</button>
+          <button class="cancel-btn" id="clearJsonBtn">Clear</button>
+        </div>
+        <input type="file" id="importJsonFileInput" accept="application/json,.json" style="display:none" />
       </div>
     </div>
   </div>
@@ -434,10 +466,28 @@ function renderScripts(scripts) {
     `;
     item.addEventListener('click', () => {
       if (s.hasConfig) {
-        // Show config view first
+        // Show config view first — reset defaults
         pendingScriptId = s.id;
         configTitle.textContent = 'Configure: ' + s.name;
-        updateConfigAiSection();
+
+        // Show the right options block
+        const stjBlock = document.getElementById('cfgScreenToJsonOptions');
+        const importBlock = document.getElementById('cfgImportDesignOptions');
+        if (s.id === 'import-design') {
+          stjBlock.style.display = 'none';
+          importBlock.style.display = 'block';
+          startRunBtn.textContent = 'Import Design';
+        } else {
+          stjBlock.style.display = 'block';
+          importBlock.style.display = 'none';
+          startRunBtn.textContent = 'Start Export';
+          const detailedRadio = document.querySelector('input[name="outputMode"][value="detailed"]');
+          if (detailedRadio) detailedRadio.checked = true;
+          cfgExportImages.disabled = false;
+          cfgExportImages.checked = true;
+          updateConfigAiSection();
+        }
+
         showView('config');
       } else {
         parent.postMessage({ pluginMessage: { type: 'run-script', scriptId: s.id } }, '*');
@@ -576,6 +626,27 @@ cfgAiEnabled.addEventListener('change', () => {
   cfgAiModeWrap.style.display = cfgAiEnabled.checked ? 'block' : 'none';
 });
 
+// Output mode changes adjust other controls automatically
+document.querySelectorAll('input[name="outputMode"]').forEach(radio => {
+  radio.addEventListener('change', handleOutputModeChange);
+});
+
+function handleOutputModeChange() {
+  const mode = document.querySelector('input[name="outputMode"]:checked').value;
+  if (mode === 'backend') {
+    // Backend mode: deterministic extraction — no images, no AI needed
+    cfgExportImages.checked = false;
+    cfgExportImages.disabled = true;
+    cfgAiEnabled.checked = false;
+    cfgAiEnabled.disabled = true;
+    cfgAiModeWrap.style.display = 'none';
+    cfgAiWarning.style.display = 'none';
+  } else {
+    cfgExportImages.disabled = false;
+    updateConfigAiSection();
+  }
+}
+
 cancelRunBtn.addEventListener('click', () => {
   pendingScriptId = null;
   showView('list');
@@ -583,12 +654,39 @@ cancelRunBtn.addEventListener('click', () => {
 
 startRunBtn.addEventListener('click', () => {
   if (!pendingScriptId) return;
+
+  // Import-design has its own payload shape
+  if (pendingScriptId === 'import-design') {
+    const jsonText = importJsonInput.value.trim();
+    if (!jsonText) {
+      showStatus('Paste JSON first.', true, false);
+      return;
+    }
+    // Quick syntax check before dispatching
+    try { JSON.parse(jsonText); } catch (err) {
+      showStatus('Invalid JSON: ' + err.message, true, false);
+      return;
+    }
+    // Persist last-used JSON locally for convenience (also stored plugin-side)
+    try { localStorage.setItem('importJsonLast', jsonText); } catch {}
+
+    parent.postMessage({
+      pluginMessage: { type: 'run-script', scriptId: 'import-design', options: { json: jsonText } }
+    }, '*');
+    const id = pendingScriptId;
+    pendingScriptId = null;
+    showStatus('Importing design…', false, false);
+    return;
+  }
+
+  // Default (screen-to-json) path
   const outputMode = document.querySelector('input[name="outputMode"]:checked').value;
   const aiMode = document.querySelector('input[name="aiMode"]:checked').value;
+
   const options = {
     exportImages: cfgExportImages.checked,
     outputMode: outputMode,
-    aiEnabled: cfgAiEnabled.checked,
+    aiEnabled: outputMode === 'backend' ? false : cfgAiEnabled.checked,
     aiMode: aiMode,
   };
   parent.postMessage({
@@ -597,6 +695,74 @@ startRunBtn.addEventListener('click', () => {
   const id = pendingScriptId;
   pendingScriptId = null;
   showStatus('Running ' + id + '...', false, false);
+});
+
+// ---- Import Design view: textarea, file load, last-used ----
+const importJsonInput = document.getElementById('importJsonInput');
+const importJsonStatus = document.getElementById('importJsonStatus');
+const loadJsonFileBtn = document.getElementById('loadJsonFileBtn');
+const loadLastJsonBtn = document.getElementById('loadLastJsonBtn');
+const clearJsonBtn = document.getElementById('clearJsonBtn');
+const importJsonFileInput = document.getElementById('importJsonFileInput');
+
+function updateImportJsonStatus() {
+  const txt = importJsonInput.value;
+  const bytes = new Blob([txt]).size;
+  let extra = '';
+  if (txt.trim()) {
+    try {
+      const parsed = JSON.parse(txt);
+      const screens = Array.isArray(parsed.screens) ? parsed.screens.length : 0;
+      const comps = Array.isArray(parsed.components) ? parsed.components.length : 0;
+      extra = ` · ${screens} screen(s), ${comps} component(s) ✓`;
+    } catch (err) {
+      extra = ' · invalid JSON ✗';
+    }
+  }
+  importJsonStatus.textContent = `${bytes.toLocaleString()} bytes${extra}`;
+}
+
+importJsonInput.addEventListener('input', updateImportJsonStatus);
+
+// Drag-drop a .json file onto the textarea
+importJsonInput.addEventListener('dragover', (e) => { e.preventDefault(); });
+importJsonInput.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    importJsonInput.value = String(reader.result || '');
+    updateImportJsonStatus();
+  };
+  reader.readAsText(file);
+});
+
+loadJsonFileBtn.addEventListener('click', () => importJsonFileInput.click());
+importJsonFileInput.addEventListener('change', () => {
+  const file = importJsonFileInput.files && importJsonFileInput.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    importJsonInput.value = String(reader.result || '');
+    updateImportJsonStatus();
+  };
+  reader.readAsText(file);
+});
+
+loadLastJsonBtn.addEventListener('click', () => {
+  try {
+    const last = localStorage.getItem('importJsonLast');
+    if (last) { importJsonInput.value = last; updateImportJsonStatus(); }
+    else { showStatus('No saved JSON found.', true, false); }
+  } catch (e) {
+    showStatus('Cannot read local storage.', true, false);
+  }
+});
+
+clearJsonBtn.addEventListener('click', () => {
+  importJsonInput.value = '';
+  updateImportJsonStatus();
 });
 
 // ---- Message handler ----

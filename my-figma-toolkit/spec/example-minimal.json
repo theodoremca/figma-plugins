@@ -1,0 +1,139 @@
+{
+  "meta": { "version": 1, "platform": "mobile", "source": "hand" },
+  "tokens": {
+    "colors": {
+      "teal-900": "#0B2E26",
+      "teal-800": "#0B4D3F",
+      "teal-700": "#0F6E56",
+      "teal-400": "#5DCAA5",
+      "white": "#FFFFFF",
+      "ink": "#111210",
+      "ink-muted": "#888780"
+    },
+    "fonts": [
+      { "family": "Inter", "styles": ["Regular", "Medium", "Bold"] }
+    ],
+    "textStyles": {
+      "h1": { "family": "Inter", "style": "Bold", "size": 32, "lineHeight": 1.15, "letterSpacing": -0.5 },
+      "body": { "family": "Inter", "style": "Regular", "size": 14, "lineHeight": 1.5 },
+      "btn": { "family": "Inter", "style": "Medium", "size": 14 }
+    }
+  },
+  "screens": [
+    {
+      "name": "Welcome",
+      "size": [375, 812],
+      "background": "white",
+      "children": [
+        {
+          "type": "rectangle",
+          "name": "hero-bg",
+          "position": { "x": 0, "y": 0 },
+          "size": [375, 320],
+          "fill": "teal-900"
+        },
+        {
+          "type": "ellipse",
+          "name": "circle-blur",
+          "position": { "x": 260, "y": 40 },
+          "size": [120, 120],
+          "fill": "teal-700",
+          "opacity": 0.5
+        },
+        {
+          "type": "text",
+          "name": "title",
+          "position": { "x": 24, "y": 220 },
+          "size": [327, 80],
+          "text": "Welcome to\nCareRide",
+          "textStyle": "h1",
+          "color": "white"
+        },
+        {
+          "type": "text",
+          "name": "body",
+          "position": { "x": 24, "y": 360 },
+          "size": [327, 60],
+          "text": "Safe, insured, accessible medical transportation — at the tap of a button.",
+          "textStyle": "body",
+          "color": "ink-muted"
+        },
+        {
+          "type": "frame",
+          "name": "btn-primary",
+          "position": { "x": 24, "y": 720 },
+          "size": [327, 52],
+          "fill": "teal-800",
+          "cornerRadius": 14,
+          "autoLayout": {
+            "direction": "row",
+            "alignItems": "center",
+            "justifyContent": "center",
+            "padding": "14"
+          },
+          "children": [
+            {
+              "type": "text",
+              "text": "Get started",
+              "textStyle": "btn",
+              "color": "white"
+            }
+          ]
+        },
+        {
+          "type": "vector",
+          "name": "icon-check",
+          "position": { "x": 167, "y": 152 },
+          "size": [40, 40],
+          "viewBox": [0, 0, 24, 24],
+          "paths": [
+            {
+              "d": "M4 12L10 18L20 6",
+              "stroke": "white",
+              "strokeWidth": 2.5,
+              "strokeLinecap": "round",
+              "strokeLinejoin": "round",
+              "fill": "none"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Loading",
+      "size": [375, 812],
+      "background": "teal-900",
+      "children": [
+        {
+          "type": "ellipse",
+          "position": { "x": 163, "y": 380 },
+          "size": [50, 50],
+          "fill": "teal-400"
+        },
+        {
+          "type": "ellipse",
+          "position": { "x": 233, "y": 380 },
+          "size": [50, 50],
+          "fill": "teal-400",
+          "opacity": 0.5
+        },
+        {
+          "type": "ellipse",
+          "position": { "x": 113, "y": 380 },
+          "size": [50, 50],
+          "fill": "teal-400",
+          "opacity": 0.2
+        },
+        {
+          "type": "text",
+          "position": { "x": 24, "y": 460 },
+          "size": [327, 30],
+          "text": "Loading…",
+          "textStyle": "body",
+          "color": "teal-400",
+          "align": "center"
+        }
+      ]
+    }
+  ]
+}

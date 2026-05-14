@@ -2,7 +2,9 @@
 (() => {
   var __create = Object.create;
   var __defProp = Object.defineProperty;
+  var __defProps = Object.defineProperties;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
   var __getOwnPropNames = Object.getOwnPropertyNames;
   var __getOwnPropSymbols = Object.getOwnPropertySymbols;
   var __getProtoOf = Object.getPrototypeOf;
@@ -20,6 +22,7 @@
       }
     return a;
   };
+  var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
   var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
     get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
   }) : x)(function(x) {
@@ -2986,8 +2989,345 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
     }
   }
 
+  // scripts/build-mode-transformer.ts
+  function toHex(c) {
+    const r = c.r, g = c.g, b = c.b;
+    const h = (n) => n.toString(16).padStart(2, "0").toUpperCase();
+    return `#${h(r)}${h(g)}${h(b)}`;
+  }
+  function toHexAlpha(c) {
+    if (c.a >= 0.995) return toHex(c);
+    return `rgba(${c.r},${c.g},${c.b},${c.a.toFixed(2)})`;
+  }
+  function rgbToHsl(r, g, b) {
+    r /= 255;
+    g /= 255;
+    b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    let h = 0, s = 0;
+    if (max !== min) {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      switch (max) {
+        case r:
+          h = (g - b) / d + (g < b ? 6 : 0);
+          break;
+        case g:
+          h = (b - r) / d + 2;
+          break;
+        case b:
+          h = (r - g) / d + 4;
+          break;
+      }
+      h /= 6;
+    }
+    return { h, s, l };
+  }
+  function nameColors(usages) {
+    const tokens = {};
+    const used = /* @__PURE__ */ new Set();
+    const scored = usages.map((u) => {
+      const { h, s, l } = rgbToHsl(u.rgba.r, u.rgba.g, u.rgba.b);
+      return __spreadProps(__spreadValues({}, u), { h, s, l });
+    });
+    function assign(name, c) {
+      if (used.has(c.hex) || tokens[name]) return;
+      tokens[name] = c.hex;
+      used.add(c.hex);
+    }
+    const byCount = [...scored].sort((a, b) => b.count - a.count);
+    const lights = byCount.filter((c) => c.l >= 0.92 && c.s < 0.15);
+    if (lights.length > 0) assign("bg", lights[0]);
+    if (lights.length > 1) assign("surface", lights[1]);
+    const surfaceMuteds = byCount.filter((c) => c.l >= 0.85 && c.l < 0.95 && c.s < 0.15 && !used.has(c.hex));
+    if (surfaceMuteds.length > 0) assign("surfaceMuted", surfaceMuteds[0]);
+    const darks = byCount.filter((c) => c.l <= 0.12 && !used.has(c.hex));
+    if (darks.length > 0) assign("ink", darks[0]);
+    const pureDark = byCount.filter((c) => c.l <= 0.03 && !used.has(c.hex));
+    if (pureDark.length > 0) assign("dark", pureDark[0]);
+    const mutedGrays = byCount.filter((c) => c.l >= 0.35 && c.l <= 0.65 && c.s < 0.15 && !used.has(c.hex));
+    if (mutedGrays.length > 0) assign("inkMuted", mutedGrays[0]);
+    if (mutedGrays.length > 1) assign("inkLight", mutedGrays[1]);
+    const borders = byCount.filter((c) => c.l >= 0.8 && c.l < 0.92 && c.s < 0.1 && !used.has(c.hex));
+    if (borders.length > 0) assign("border", borders[0]);
+    const whites = byCount.filter((c) => c.l >= 0.97 && !used.has(c.hex));
+    if (whites.length > 0) assign("onPrimary", whites[0]);
+    const offWhites = byCount.filter((c) => c.l >= 0.92 && c.l < 0.98 && !used.has(c.hex));
+    if (offWhites.length > 0) assign("onDark", offWhites[0]);
+    const saturated = byCount.filter((c) => c.s > 0.45 && c.l > 0.25 && c.l < 0.75 && !used.has(c.hex));
+    if (saturated.length > 0) assign("primary", saturated[0]);
+    const greens = saturated.filter((c) => {
+      const hDeg = c.h * 360;
+      return hDeg >= 90 && hDeg <= 170 && !used.has(c.hex);
+    });
+    if (greens.length > 0) assign("positive", greens[0]);
+    const reds = saturated.filter((c) => {
+      const hDeg = c.h * 360;
+      return (hDeg <= 20 || hDeg >= 340) && !used.has(c.hex);
+    });
+    if (reds.length > 0) assign("negative", reds[0]);
+    let genericIdx = 1;
+    for (const c of byCount) {
+      if (used.has(c.hex)) continue;
+      if (c.rgba.a < 0.05) continue;
+      assign(`color${genericIdx++}`, c);
+    }
+    return tokens;
+  }
+  function collectTokenUsage(nodes) {
+    const colorMap2 = /* @__PURE__ */ new Map();
+    const fontMap2 = /* @__PURE__ */ new Map();
+    const considerColor = (rgba, ctx) => {
+      if (!rgba) return;
+      const hex = toHex(rgba);
+      const existing = colorMap2.get(hex);
+      if (existing) {
+        existing.count++;
+        if (ctx === "text") existing.onText++;
+        if (ctx === "stroke") existing.onStroke++;
+        if (ctx === "bg") existing.onBackground++;
+      } else {
+        colorMap2.set(hex, {
+          hex,
+          rgba,
+          count: 1,
+          onText: ctx === "text" ? 1 : 0,
+          onStroke: ctx === "stroke" ? 1 : 0,
+          onBackground: ctx === "bg" ? 1 : 0
+        });
+      }
+    };
+    function walk(n) {
+      const isText = n.type === "TEXT";
+      if (n.fills && Array.isArray(n.fills)) {
+        for (const f of n.fills) {
+          if (f.type === "SOLID" && f.color) {
+            considerColor(f.color, isText ? "text" : "bg");
+          }
+        }
+      }
+      if (n.strokes && Array.isArray(n.strokes)) {
+        for (const s of n.strokes) {
+          if (s.type === "SOLID" && s.color) {
+            considerColor(s.color, "stroke");
+          }
+        }
+      }
+      if (isText && n.fontFamily) {
+        fontMap2.set(n.fontFamily, (fontMap2.get(n.fontFamily) || 0) + 1);
+      }
+      if (n.children) {
+        for (const child of n.children) walk(child);
+      }
+    }
+    for (const n of nodes) walk(n);
+    const colors = Array.from(colorMap2.values());
+    const font = fontMap2.size > 0 ? [...fontMap2.entries()].sort((a, b) => b[1] - a[1])[0][0] : void 0;
+    return { colors, font };
+  }
+  function buildHexToToken(tokens) {
+    const m = /* @__PURE__ */ new Map();
+    for (const [name, hex] of Object.entries(tokens)) {
+      m.set(hex.toUpperCase(), name);
+    }
+    return m;
+  }
+  function colorToToken(rgba, hexToToken) {
+    if (!rgba) return void 0;
+    if (rgba.a < 0.995) {
+      return toHexAlpha(rgba);
+    }
+    const hex = toHex(rgba);
+    return hexToToken.get(hex) || hex;
+  }
+  function paddingShorthand(n) {
+    const t = n.paddingTop || 0;
+    const r = n.paddingRight || 0;
+    const b = n.paddingBottom || 0;
+    const l = n.paddingLeft || 0;
+    if (!t && !r && !b && !l) return void 0;
+    if (t === r && r === b && b === l) return `${t}`;
+    if (t === b && l === r) return `${t} ${l}`;
+    return `${t} ${r} ${b} ${l}`;
+  }
+  function shadowShorthand(effects) {
+    var _a, _b, _c, _d;
+    if (!effects || effects.length === 0) return void 0;
+    const shadow = effects.find((e) => e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW");
+    if (!shadow) return void 0;
+    const x = (_b = (_a = shadow.offset) == null ? void 0 : _a.x) != null ? _b : 0;
+    const y = (_d = (_c = shadow.offset) == null ? void 0 : _c.y) != null ? _d : 0;
+    const blur = shadow.radius || 0;
+    const c = shadow.color;
+    const rgba = c ? `rgba(${c.r},${c.g},${c.b},${c.a.toFixed(2)})` : "rgba(0,0,0,0.1)";
+    return `${x} ${y} ${blur} ${rgba}`;
+  }
+  function firstFillColor(n, hexToToken) {
+    if (!n.fills || !Array.isArray(n.fills)) return void 0;
+    for (const f of n.fills) {
+      if (f.type === "SOLID" && f.color) return colorToToken(f.color, hexToToken);
+    }
+    return void 0;
+  }
+  function firstStrokeColor(n, hexToToken) {
+    if (!n.strokes || !Array.isArray(n.strokes)) return void 0;
+    for (const s of n.strokes) {
+      if (s.type === "SOLID" && s.color) return colorToToken(s.color, hexToToken);
+    }
+    return void 0;
+  }
+  function classifyBuildNode(n, parent) {
+    const lower = (n.name || "").toLowerCase();
+    if (n.type === "TEXT") return "text";
+    if (/\bstatus\s*bar\b/.test(lower)) return "status-bar";
+    if (/\b(tab\s*bar|bottom\s*bar|bottom\s*nav)\b/.test(lower)) return "bottom-nav";
+    if (/\b(nav\s*bar|header|app\s*bar|top\s*bar)\b/.test(lower)) return "header";
+    if (/\b(input|field|textfield|text\s*field|textbox)\b/.test(lower)) return "input";
+    if (/\bsearch\b/.test(lower)) return "search";
+    if (/\b(button|btn|cta)\b/.test(lower)) return "button";
+    if (/\b(checkbox|radio|toggle|switch)\b/.test(lower)) return "toggle";
+    if (/\b(list|feed)\b/.test(lower)) return "list";
+    if (/\b(card|tile)\b/.test(lower)) return "card";
+    if (/\b(list\s*item|row|cell)\b/.test(lower)) return "list-item";
+    if (/\b(modal|dialog|sheet|popup|drawer)\b/.test(lower)) return "modal";
+    if (/\b(chip|tag|badge|pill)\b/.test(lower)) return "chip";
+    if (/\b(divider|separator)\b/.test(lower)) return "divider";
+    if (/\b(empty\s*state|empty)\b/.test(lower) && n.children && n.children.length >= 2) return "empty-state";
+    if (/\b(avatar|profile\s*pic|thumbnail)\b/.test(lower)) return "avatar";
+    if (/\b(section\s*header)\b/.test(lower)) return "section-header";
+    if (/\bicon\b/.test(lower)) return "icon";
+    if (n.fills && n.fills.some((f) => f.type === "IMAGE")) return "image";
+    if (["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON"].includes(n.type)) return "icon";
+    if (n.type === "ELLIPSE") {
+      if (n.width && n.width < 30) return "icon";
+      return "avatar";
+    }
+    if (n.type === "LINE") return "divider";
+    if (n.children && n.children.length >= 3) {
+      const firstType = n.children[0].type;
+      const firstW = Math.round(n.children[0].width || 0);
+      const firstH = Math.round(n.children[0].height || 0);
+      const similar = n.children.filter(
+        (c) => c.type === firstType && Math.abs((c.width || 0) - firstW) < 5 && Math.abs((c.height || 0) - firstH) < 5
+      );
+      if (similar.length === n.children.length && similar.length >= 3) {
+        return "list";
+      }
+    }
+    if (n.cornerRadius && n.cornerRadius > 0 && n.fills && n.fills.some((f) => f.type === "SOLID") && n.children && n.children.some((c) => c.type === "TEXT")) {
+      if (n.width && n.height && n.height < 100 && n.width < 400) {
+        return "button";
+      }
+    }
+    if (n.isInstance && n.componentName) return "component";
+    return "container";
+  }
+  function transformNode(n, hexToToken, parent, topLevelScreen) {
+    const type = classifyBuildNode(n, parent);
+    if (type === "text") {
+      const out2 = { type: "text", text: n.characters || "" };
+      const color = firstFillColor(n, hexToToken);
+      if (color) out2.color = color;
+      if (n.fontSize && n.fontSize !== "mixed") out2.size = n.fontSize;
+      if (n.fontWeight && !/regular/i.test(n.fontWeight)) out2.weight = n.fontWeight;
+      if (n.textAlignHorizontal && n.textAlignHorizontal !== "LEFT") out2.align = n.textAlignHorizontal.toLowerCase();
+      return out2;
+    }
+    if (type === "divider") return { type: "divider" };
+    if (type === "icon") {
+      const out2 = { type: "icon" };
+      if (n.iconLibrary && n.iconName) {
+        out2.icon = `${n.iconLibrary}/${n.iconName}`;
+      } else if (n.imageFile) {
+        out2.image = n.imageFile;
+      } else {
+        out2.name = n.name;
+      }
+      const color = firstFillColor(n, hexToToken);
+      if (color) out2.color = color;
+      return out2;
+    }
+    const out = { type };
+    if (n.name && !/^(frame|group|rectangle|vector)\s*\d*$/i.test(n.name)) {
+      out.name = n.name;
+    }
+    if (n.isInstance && n.componentName) {
+      out.component = n.componentName;
+    }
+    if (topLevelScreen) {
+      if (typeof n.x === "number" && n.x !== 0) out.x = Math.round(n.x);
+      if (typeof n.y === "number" && n.y !== 0) out.y = Math.round(n.y);
+    }
+    if (typeof n.width === "number" && typeof n.height === "number") {
+      if (type !== "text" && type !== "icon") {
+        out.width = Math.round(n.width);
+        out.height = Math.round(n.height);
+      }
+    }
+    const bg = firstFillColor(n, hexToToken);
+    if (bg) out.bg = bg;
+    const strokeColor = firstStrokeColor(n, hexToToken);
+    if (strokeColor) out.border = strokeColor;
+    if (n.cornerRadius && n.cornerRadius !== "mixed" && n.cornerRadius > 0) {
+      out.radius = n.cornerRadius;
+    } else if (n.topLeftRadius || n.topRightRadius || n.bottomLeftRadius || n.bottomRightRadius) {
+      const tl = n.topLeftRadius || 0, tr = n.topRightRadius || 0;
+      const br = n.bottomRightRadius || 0, bl = n.bottomLeftRadius || 0;
+      out.radius = `${tl} ${tr} ${br} ${bl}`;
+    }
+    const pad = paddingShorthand(n);
+    if (pad) out.padding = pad;
+    if (n.layoutMode && n.layoutMode !== "NONE") {
+      out.layout = n.layoutMode === "HORIZONTAL" ? "row" : "col";
+      if (n.itemSpacing) out.gap = n.itemSpacing;
+    }
+    const shadow = shadowShorthand(n.effects);
+    if (shadow) out.shadow = shadow;
+    if (typeof n.opacity === "number" && n.opacity < 1) out.opacity = n.opacity;
+    if (n.iconLibrary && n.iconName) {
+      out.icon = `${n.iconLibrary}/${n.iconName}`;
+    } else if (n.imageFile) {
+      out.image = n.imageFile;
+    }
+    if (n.children && n.children.length > 0) {
+      const transformed = n.children.map((c) => transformNode(c, hexToToken, n, false)).filter((c) => c !== null);
+      if (transformed.length > 0) out.children = transformed;
+    }
+    return out;
+  }
+  function transformScreen(n, hexToToken) {
+    const out = {
+      name: n.name,
+      size: [Math.round(n.width), Math.round(n.height)]
+    };
+    const bg = firstFillColor(n, hexToToken);
+    if (bg) out.bg = bg;
+    if (n.children && n.children.length > 0) {
+      out.children = n.children.map((c) => transformNode(c, hexToToken, n, true)).filter((c) => c !== null);
+    }
+    return out;
+  }
+  function buildModeTransform(screens) {
+    const { colors, font } = collectTokenUsage(screens);
+    const colorTokens = nameColors(colors);
+    const hexToToken = buildHexToToken(colorTokens);
+    const transformedScreens = screens.map((s) => transformScreen(s, hexToToken));
+    return {
+      meta: {
+        exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        mode: "build",
+        tokens: {
+          colors: colorTokens,
+          font
+        }
+      },
+      screens: transformedScreens
+    };
+  }
+
   // scripts/screen-to-json.ts
-  var IMAGE_SCALE = 1.5;
+  var IMAGE_SCALE = 1;
   var IMAGES_FOLDER = "images";
   var CLIENT_STORAGE_KEY = "screen-to-json-base-path";
   function generateTimestamp() {
@@ -3008,8 +3348,79 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
     const idSuffix = nodeId.replace(":", "-");
     return `${clean}-${idSuffix}`;
   }
+  var KNOWN_ICON_LIBRARIES = /* @__PURE__ */ new Set([
+    "feather",
+    "feathericons",
+    "vuesax",
+    "iconsax",
+    "lucide",
+    "material",
+    "material-symbols",
+    "material-icons",
+    "mui",
+    "heroicons",
+    "ionicons",
+    "ion",
+    "fontawesome",
+    "fa",
+    "fa-solid",
+    "fa-regular",
+    "fa-brands",
+    "phosphor",
+    "tabler",
+    "bootstrap",
+    "bi",
+    "antd",
+    "remix",
+    "iconpark",
+    "octicons",
+    "ri"
+  ]);
+  function detectIconLibraryFromChain(names) {
+    for (const n of names) {
+      const hit = detectIconLibrary(n);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  function isLikelyIcon(node, ancestorNames) {
+    if (detectIconLibraryFromChain([node.name, ...ancestorNames])) return true;
+    const w = node.width || 0;
+    const h = node.height || 0;
+    if (w > 0 && w <= 48 && h > 0 && h <= 48 && Math.abs(w - h) < 8) return true;
+    if (/\bicon\b/i.test(node.name)) return true;
+    return false;
+  }
+  function detectIconLibrary(name) {
+    const normalized = name.trim().toLowerCase();
+    const parts = normalized.split(/[\/\\]/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length < 2) return null;
+    if (parts[0] === "icon" || parts[0] === "icons") parts.shift();
+    if (parts.length < 2) return null;
+    const first = parts[0];
+    if (!KNOWN_ICON_LIBRARIES.has(first)) return null;
+    const iconName = parts.slice(1).join("/");
+    if (!iconName) return null;
+    const libraryAlias = {
+      "feathericons": "feather",
+      "iconsax": "vuesax",
+      "material-icons": "material",
+      "material-symbols": "material",
+      "mui": "material",
+      "ion": "ionicons",
+      "fa": "fontawesome",
+      "fa-solid": "fontawesome",
+      "fa-regular": "fontawesome",
+      "fa-brands": "fontawesome",
+      "bi": "bootstrap",
+      "ri": "remix"
+    };
+    const library = libraryAlias[first] || first;
+    return { library, iconName };
+  }
   function zipImagePath(baseName, ext) {
-    return `${IMAGES_FOLDER}/${baseName}@1.5x.${ext}`;
+    const scaleSuffix = IMAGE_SCALE === 1 ? "" : `@${IMAGE_SCALE}x`;
+    return `${IMAGES_FOLDER}/${baseName}${scaleSuffix}.${ext}`;
   }
   function serializePaint(paint, _fileKey) {
     var _a;
@@ -3067,8 +3478,8 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
   var componentUsageMap = /* @__PURE__ */ new Map();
   var imageExportTasks = [];
   var imageFileMap = /* @__PURE__ */ new Map();
-  function traverseNode(node, fileKey) {
-    var _a;
+  function traverseNode(node, fileKey, ancestorNames = []) {
+    var _a, _b;
     const json = {
       id: node.id,
       name: node.name,
@@ -3230,31 +3641,42 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
           json.imageRef = fill.imageHash;
           if (!imageFileMap.has(fill.imageHash)) {
             const baseName = safeFilename(node.name, node.id);
-            imageFileMap.set(fill.imageHash, {
-              png: zipImagePath(baseName, "png"),
-              jpeg: zipImagePath(baseName, "jpg")
-            });
+            imageFileMap.set(fill.imageHash, zipImagePath(baseName, "png"));
             imageExportTasks.push({ nodeId: node.id, node, baseName });
           }
-          json.imageFiles = imageFileMap.get(fill.imageHash);
+          json.imageFile = imageFileMap.get(fill.imageHash);
           break;
         }
       }
     }
-    if (!hasImageFill && (node.type === "VECTOR" || node.type === "BOOLEAN_OPERATION" || node.type === "STAR" || node.type === "POLYGON" || node.type === "LINE")) {
-      const baseName = safeFilename(node.name, node.id);
-      const files = {
-        png: zipImagePath(baseName, "png"),
-        jpeg: zipImagePath(baseName, "jpg")
-      };
-      imageFileMap.set(node.id, files);
-      imageExportTasks.push({ nodeId: node.id, node, baseName });
-      json.imageFiles = files;
+    if (!hasImageFill && (node.type === "VECTOR" || node.type === "BOOLEAN_OPERATION" || node.type === "STAR" || node.type === "POLYGON" || node.type === "LINE" || // Component instances that look like icons (small, or named with icon library prefix)
+    node.type === "INSTANCE" && isLikelyIcon(node, ancestorNames))) {
+      const iconInfo = detectIconLibraryFromChain([node.name, ...ancestorNames]);
+      if (iconInfo) {
+        json.iconLibrary = iconInfo.library;
+        json.iconName = iconInfo.iconName;
+      } else {
+        let dedupKey = node.id;
+        if (node.type === "INSTANCE") {
+          const mainId = (_b = node.mainComponent) == null ? void 0 : _b.id;
+          if (mainId) dedupKey = `component:${mainId}`;
+        }
+        if (imageFileMap.has(dedupKey)) {
+          json.imageFile = imageFileMap.get(dedupKey);
+        } else {
+          const baseName = safeFilename(node.name, node.id);
+          const file = zipImagePath(baseName, "png");
+          imageFileMap.set(dedupKey, file);
+          imageExportTasks.push({ nodeId: node.id, node, baseName });
+          json.imageFile = file;
+        }
+      }
     }
     if ("children" in node) {
       const childNodes = node.children;
       if (childNodes && childNodes.length > 0) {
-        json.children = childNodes.filter((child) => child.visible).map((child) => traverseNode(child, fileKey));
+        const nextAncestors = [node.name, ...ancestorNames].slice(0, 5);
+        json.children = childNodes.filter((child) => child.visible).map((child) => traverseNode(child, fileKey, nextAncestors));
       }
     }
     return json;
@@ -3263,7 +3685,7 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
     if (json.fills) {
       for (const fill of json.fills) {
         if (fill.imageRef && imageFileMap.has(fill.imageRef)) {
-          fill.imageFiles = imageFileMap.get(fill.imageRef);
+          fill.imageFile = imageFileMap.get(fill.imageRef);
         }
       }
     }
@@ -3275,19 +3697,13 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
   }
   function patchFullPaths(nodes, fullBasePath) {
     for (const node of nodes) {
-      if (node.imageFiles) {
-        node.imageFiles = {
-          png: `${fullBasePath}/${node.imageFiles.png}`,
-          jpeg: `${fullBasePath}/${node.imageFiles.jpeg}`
-        };
+      if (node.imageFile) {
+        node.imageFile = `${fullBasePath}/${node.imageFile}`;
       }
       if (node.fills) {
         for (const fill of node.fills) {
-          if (fill.imageFiles) {
-            fill.imageFiles = {
-              png: `${fullBasePath}/${fill.imageFiles.png}`,
-              jpeg: `${fullBasePath}/${fill.imageFiles.jpeg}`
-            };
+          if (fill.imageFile) {
+            fill.imageFile = `${fullBasePath}/${fill.imageFile}`;
           }
         }
       }
@@ -3295,6 +3711,46 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
         patchFullPaths(node.children, fullBasePath);
       }
     }
+  }
+  function classifyNode(node) {
+    const lower = node.name.toLowerCase();
+    if (node.type === "TEXT") return "text";
+    if (/\b(input|field|textfield|text\s*field|textbox)\b/.test(lower)) return "input";
+    if (/\bsearch\b/.test(lower)) return "input:search";
+    if (/\b(button|btn|cta)\b/.test(lower)) return "button";
+    if (/\b(checkbox|radio|toggle|switch)\b/.test(lower)) return "toggle";
+    if (/\b(list|feed|table)\b/.test(lower)) return "list";
+    if (/\b(card|tile)\b/.test(lower)) return "card";
+    if (/\b(list\s*item|row|cell)\b/.test(lower)) return "list-item";
+    if (/\b(modal|dialog|sheet|popup|drawer)\b/.test(lower)) return "modal";
+    if (/\b(nav|navigation|tab\s*bar|bottom\s*bar|header|app\s*bar|status\s*bar)\b/.test(lower)) return "navigation";
+    if (/\b(icon)\b/.test(lower)) return "icon";
+    if (/\b(avatar|profile\s*pic|profile\s*image|thumbnail|photo|picture|image)\b/.test(lower)) return "image";
+    if (/\b(chip|tag|badge|pill)\b/.test(lower)) return "chip";
+    if (/\b(link)\b/.test(lower)) return "link";
+    if (/\b(divider|separator|line)\b/.test(lower)) return "divider";
+    if (node.imageRef || node.fills && node.fills.some((f) => f.type === "IMAGE")) return "image";
+    if (node.type === "VECTOR" || node.type === "BOOLEAN_OPERATION" || node.type === "STAR" || node.type === "POLYGON") return "icon";
+    if (node.type === "ELLIPSE") return "icon";
+    if (node.isInstance && node.componentName) return "component";
+    return "container";
+  }
+  function toBackendNode(node) {
+    const type = classifyNode(node);
+    if (type === "divider") return null;
+    const out = {
+      name: node.name,
+      type
+    };
+    if (node.characters) out.text = node.characters;
+    if (node.isInstance && node.componentName) {
+      out.component = node.componentName;
+    }
+    if (node.children && node.children.length > 0) {
+      const transformed = node.children.map(toBackendNode).filter((c) => c !== null);
+      if (transformed.length > 0) out.children = transformed;
+    }
+    return out;
   }
   function toCompactScreen(node) {
     const compact = {
@@ -3315,7 +3771,8 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
     if (node.fontFamily) compact.font = `${node.fontFamily} ${node.fontWeight || ""}`.trim();
     if (node.fontSize) compact.fontSize = node.fontSize;
     if (node.layoutMode && node.layoutMode !== "NONE") compact.layout = node.layoutMode;
-    if (node.imageFiles) compact.image = node.imageFiles.png;
+    if (node.iconLibrary && node.iconName) compact.icon = `${node.iconLibrary}/${node.iconName}`;
+    else if (node.imageFile) compact.image = node.imageFile;
     if (node.isInstance && node.componentName) compact.component = node.componentName;
     if (node.semanticRole) compact.role = node.semanticRole;
     if (node.summary) compact.summary = node.summary;
@@ -3360,6 +3817,8 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
       }
       const zip = new import_jszip.default();
       const allExportedFiles = [];
+      const byteHashToPath = /* @__PURE__ */ new Map();
+      const pathRemap = /* @__PURE__ */ new Map();
       if (opts.exportImages && imageExportTasks.length > 0) {
         figma.notify(`Exporting ${imageExportTasks.length} image(s) at ${IMAGE_SCALE}x...`);
         for (const task of imageExportTasks) {
@@ -3368,21 +3827,27 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
               format: "PNG",
               constraint: { type: "SCALE", value: IMAGE_SCALE }
             });
-            const jpgBytes = await task.node.exportAsync({
-              format: "JPG",
-              constraint: { type: "SCALE", value: IMAGE_SCALE }
-            });
             const pngZipPath = zipImagePath(task.baseName, "png");
-            const jpgZipPath = zipImagePath(task.baseName, "jpg");
-            zip.file(pngZipPath, pngBytes);
-            zip.file(jpgZipPath, jpgBytes);
-            allExportedFiles.push(
-              `${fullBasePath}/${pngZipPath}`,
-              `${fullBasePath}/${jpgZipPath}`
-            );
+            const hash = hashBytes(pngBytes);
+            if (byteHashToPath.has(hash)) {
+              const canonical = byteHashToPath.get(hash);
+              pathRemap.set(pngZipPath, canonical);
+            } else {
+              byteHashToPath.set(hash, pngZipPath);
+              zip.file(pngZipPath, pngBytes);
+              allExportedFiles.push(`${fullBasePath}/${pngZipPath}`);
+            }
           } catch (err) {
             console.error(`Failed to export ${task.baseName}:`, err);
           }
+        }
+        if (pathRemap.size > 0) {
+          for (const [key, val] of imageFileMap.entries()) {
+            if (pathRemap.has(val)) {
+              imageFileMap.set(key, pathRemap.get(val));
+            }
+          }
+          remapImagePaths(screens, pathRemap);
         }
       }
       if (opts.exportImages) {
@@ -3406,7 +3871,7 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
       let sharedComponents;
       const perScreenUsage = [];
       let totalUsage;
-      if (opts.aiEnabled && aiSettings.enabled) {
+      if (opts.outputMode !== "backend" && opts.aiEnabled && aiSettings.enabled) {
         figma.ui.postMessage({ type: "ai-status", status: "running" });
         if (opts.aiMode === "per-screen") {
           const screenSummaryData = [];
@@ -3478,22 +3943,46 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
           }
         }
       }
-      const outputScreens = opts.outputMode === "compact" ? screens.map(toCompactScreen) : screens;
-      const output = {
-        exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        figmaFileKey: fileKey,
-        exportPath: fullBasePath,
-        outputMode: opts.outputMode,
-        imageScale: opts.exportImages ? IMAGE_SCALE : void 0,
-        imageFormats: opts.exportImages ? ["png", "jpeg"] : void 0,
-        aiEnriched,
-        aiMode: opts.aiEnabled ? opts.aiMode : void 0,
-        flowDescription,
-        sharedComponents,
-        screens: outputScreens,
-        reusableComponents,
-        exportedImages: opts.exportImages ? allExportedFiles : void 0
-      };
+      let output;
+      if (opts.outputMode === "backend") {
+        const backendScreens = screens.map(toBackendNode);
+        output = {
+          exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          figmaFileKey: fileKey,
+          outputMode: "backend",
+          note: "Minimal structural extraction. Feed this to your own AI to analyze backend requirements.",
+          screens: backendScreens
+        };
+      } else if (opts.outputMode === "detailed") {
+        const built = buildModeTransform(screens);
+        output = built;
+        if (aiEnriched) {
+          output.aiInsights = {
+            flowDescription,
+            sharedComponents
+          };
+        }
+        if (opts.exportImages && allExportedFiles.length > 0) {
+          output.exportedImages = allExportedFiles;
+        }
+      } else {
+        const outputScreens = screens.map(toCompactScreen);
+        output = {
+          exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          figmaFileKey: fileKey,
+          exportPath: fullBasePath,
+          outputMode: opts.outputMode,
+          imageScale: opts.exportImages ? IMAGE_SCALE : void 0,
+          imageFormat: opts.exportImages ? "png" : void 0,
+          aiEnriched,
+          aiMode: opts.aiEnabled ? opts.aiMode : void 0,
+          flowDescription,
+          sharedComponents,
+          screens: outputScreens,
+          reusableComponents,
+          exportedImages: opts.exportImages ? allExportedFiles : void 0
+        };
+      }
       Object.keys(output).forEach((k) => output[k] === void 0 && delete output[k]);
       const jsonString = JSON.stringify(output, null, 2);
       zip.file("screen.json", jsonString);
@@ -3506,10 +3995,11 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
         componentCount: Object.keys(reusableComponents).length,
         imageCount: opts.exportImages ? imageExportTasks.length : 0
       });
+      const zipName = opts.outputMode === "backend" ? `${zipFolderName}-backend.zip` : opts.outputMode === "compact" ? `${zipFolderName}-compact.zip` : `${zipFolderName}.zip`;
       figma.ui.postMessage({
         type: "download-zip",
         bytes: Array.from(zipBlob),
-        zipFilename: `${zipFolderName}.zip`,
+        zipFilename: zipName,
         screenCount: screens.length,
         componentCount: Object.keys(reusableComponents).length,
         imageCount: opts.exportImages ? imageExportTasks.length : 0
@@ -3519,13 +4009,40 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
       );
     }
   };
+  function hashBytes(bytes) {
+    let hi = 3421674724;
+    let lo = 2216829733;
+    for (let i = 0; i < bytes.length; i++) {
+      lo ^= bytes[i];
+      const hiNew = hi * 16777217 + lo * 0 >>> 0;
+      const loNew = lo * 435 >>> 0;
+      hi = hiNew;
+      lo = loNew;
+    }
+    return `${hi.toString(16).padStart(8, "0")}${lo.toString(16).padStart(8, "0")}`;
+  }
+  function remapImagePaths(nodes, pathRemap) {
+    for (const node of nodes) {
+      if (node.imageFile && pathRemap.has(node.imageFile)) {
+        node.imageFile = pathRemap.get(node.imageFile);
+      }
+      if (node.fills) {
+        for (const fill of node.fills) {
+          if (fill.imageFile && pathRemap.has(fill.imageFile)) {
+            fill.imageFile = pathRemap.get(fill.imageFile);
+          }
+        }
+      }
+      if (node.children) remapImagePaths(node.children, pathRemap);
+    }
+  }
   function stripImageFiles(nodes) {
     for (const node of nodes) {
-      delete node.imageFiles;
+      delete node.imageFile;
       delete node.imageRef;
       if (node.fills) {
         for (const fill of node.fills) {
-          delete fill.imageFiles;
+          delete fill.imageFile;
           delete fill.imageRef;
         }
       }
@@ -3536,8 +4053,8 @@ ${JSON.stringify(screenSummaries, null, 2)}`;
 
   // scripts/project-blueprint.ts
   function rgbToHex(r, g, b) {
-    const toHex = (n) => Math.round(n * 255).toString(16).padStart(2, "0");
-    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+    const toHex2 = (n) => Math.round(n * 255).toString(16).padStart(2, "0");
+    return `#${toHex2(r)}${toHex2(g)}${toHex2(b)}`;
   }
   var colorMap = /* @__PURE__ */ new Map();
   var fontMap = /* @__PURE__ */ new Map();
@@ -3972,12 +4489,695 @@ Rules:
   };
   var project_blueprint_default = projectBlueprint;
 
+  // scripts/claude-test.ts
+  var BRIDGE_URL = "http://localhost:11437";
+  var claudeTest = {
+    id: "claude-test",
+    name: "Claude Test (local)",
+    description: "Sends a prompt to your local Claude Code via the bridge server",
+    async run() {
+      const selection = figma.currentPage.selection;
+      let prompt;
+      if (selection.length === 0) {
+        prompt = "Say hello in one short sentence and tell me what model you are.";
+      } else {
+        const first = selection[0];
+        prompt = `I have a Figma node selected. Its name is "${first.name}" and its type is ${first.type}. In one short sentence, guess what kind of UI element this is and what it might do. No preamble, just the guess.`;
+      }
+      figma.notify("Calling local Claude Code\u2026");
+      figma.ui.postMessage({ type: "ai-status", status: "running" });
+      const startTime = Date.now();
+      try {
+        const res = await fetch(`${BRIDGE_URL}/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt })
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`Bridge returned ${res.status}: ${errText}`);
+        }
+        const data = await res.json();
+        const response = data.response || "(empty response)";
+        const durationMs = Date.now() - startTime;
+        const output = {
+          prompt,
+          response,
+          durationMs,
+          bridgeUrl: BRIDGE_URL
+        };
+        const jsonString = JSON.stringify(output, null, 2);
+        figma.ui.postMessage({
+          type: "ai-status",
+          status: "done",
+          usage: {
+            provider: "claude-local",
+            model: "claude (via bridge)",
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+            estimatedCostUSD: 0,
+            durationMs
+          }
+        });
+        figma.ui.postMessage({
+          type: "json-output",
+          json: jsonString,
+          screenCount: 1,
+          componentCount: 0,
+          imageCount: 0
+        });
+        figma.notify(`Claude replied in ${(durationMs / 1e3).toFixed(1)}s`);
+      } catch (err) {
+        figma.ui.postMessage({ type: "ai-status", status: "failed" });
+        const msg = err.message || String(err);
+        figma.notify(
+          msg.includes("Failed to fetch") ? `Bridge unreachable \u2014 is it running? (node bridge/claude-bridge.js)` : `Claude bridge error: ${msg}`,
+          { timeout: 6e3 }
+        );
+        console.error("Claude test failed:", err);
+      }
+    }
+  };
+  var claude_test_default = claudeTest;
+
+  // scripts/import-design-builders.ts
+  function parseColor(input, ctx) {
+    if (!input) return null;
+    let s = String(input).trim();
+    if (ctx.tokens.colors[s]) s = ctx.tokens.colors[s];
+    if (s === "transparent" || s === "none") return { color: { r: 0, g: 0, b: 0 }, opacity: 0 };
+    const rgba = s.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)$/i);
+    if (rgba) {
+      return {
+        color: { r: +rgba[1] / 255, g: +rgba[2] / 255, b: +rgba[3] / 255 },
+        opacity: rgba[4] !== void 0 ? parseFloat(rgba[4]) : 1
+      };
+    }
+    if (s.startsWith("#")) {
+      let hex = s.slice(1);
+      if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+      const r = parseInt(hex.slice(0, 2), 16) / 255;
+      const g = parseInt(hex.slice(2, 4), 16) / 255;
+      const b = parseInt(hex.slice(4, 6), 16) / 255;
+      const a = hex.length === 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1;
+      if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+        return { color: { r, g, b }, opacity: a };
+      }
+    }
+    console.warn(`[import] Could not parse color: "${input}"`);
+    return null;
+  }
+  function toFigmaFill(input, ctx) {
+    if (input == null) return null;
+    if (typeof input === "string") {
+      const c = parseColor(input, ctx);
+      if (!c) return null;
+      return { type: "SOLID", color: c.color, opacity: c.opacity };
+    }
+    if (typeof input === "object" && input.type) {
+      if (input.type === "linear-gradient" || input.type === "radial-gradient" || input.type === "angular-gradient") {
+        const stops = (input.stops || []).map((s) => {
+          const c = parseColor(s.color, ctx) || { color: { r: 0, g: 0, b: 0 }, opacity: 1 };
+          return {
+            position: typeof s.position === "number" ? s.position : 0,
+            color: { r: c.color.r, g: c.color.g, b: c.color.b, a: c.opacity }
+          };
+        });
+        const from = input.from || [0, 0];
+        const to = input.to || [0, 1];
+        const dx = to[0] - from[0];
+        const dy = to[1] - from[1];
+        const gradientTransform = [
+          [dx, dy, from[0]],
+          [-dy, dx, from[1]]
+        ];
+        const typeMap = {
+          "linear-gradient": "GRADIENT_LINEAR",
+          "radial-gradient": "GRADIENT_RADIAL",
+          "angular-gradient": "GRADIENT_ANGULAR"
+        };
+        return {
+          type: typeMap[input.type],
+          gradientStops: stops,
+          gradientTransform
+        };
+      }
+    }
+    return null;
+  }
+  function parseShadowShorthand(input, ctx) {
+    const trimmed = input.trim();
+    const colorMatch = trimmed.match(/(rgba?\([^)]*\)|#[0-9a-fA-F]{3,8}|[a-zA-Z_][\w-]*)\s*$/);
+    if (!colorMatch) return null;
+    const colorStr = colorMatch[1];
+    const numsStr = trimmed.slice(0, trimmed.length - colorStr.length).trim();
+    const nums = numsStr.split(/\s+/).map(parseFloat).filter((n) => !Number.isNaN(n));
+    if (nums.length < 3) return null;
+    const x = nums[0];
+    const y = nums[1];
+    const blur = nums[2];
+    const spread = nums.length >= 4 ? nums[3] : 0;
+    const c = parseColor(colorStr, ctx);
+    if (!c) return null;
+    return {
+      type: "DROP_SHADOW",
+      color: { r: c.color.r, g: c.color.g, b: c.color.b, a: c.opacity },
+      offset: { x, y },
+      radius: blur,
+      spread,
+      blendMode: "NORMAL",
+      visible: true,
+      showShadowBehindNode: false
+    };
+  }
+  function toFigmaEffects(spec, ctx) {
+    const effects = [];
+    if (typeof spec.shadow === "string") {
+      const e = parseShadowShorthand(spec.shadow, ctx);
+      if (e) effects.push(e);
+    }
+    if (Array.isArray(spec.effects)) {
+      for (const eSpec of spec.effects) {
+        if (eSpec.type === "drop-shadow" || eSpec.type === "inner-shadow") {
+          const c = parseColor(eSpec.color, ctx) || { color: { r: 0, g: 0, b: 0 }, opacity: 0.1 };
+          effects.push({
+            type: eSpec.type === "drop-shadow" ? "DROP_SHADOW" : "INNER_SHADOW",
+            color: { r: c.color.r, g: c.color.g, b: c.color.b, a: c.opacity },
+            offset: { x: eSpec.x || 0, y: eSpec.y || 0 },
+            radius: eSpec.blur || 0,
+            spread: eSpec.spread || 0,
+            blendMode: "NORMAL",
+            visible: true,
+            showShadowBehindNode: false
+          });
+        } else if (eSpec.type === "layer-blur" || eSpec.type === "background-blur") {
+          effects.push({
+            type: eSpec.type === "layer-blur" ? "LAYER_BLUR" : "BACKGROUND_BLUR",
+            radius: eSpec.radius || 0,
+            visible: true
+          });
+        }
+      }
+    }
+    return effects;
+  }
+  function applyCommonStyles(node, spec, ctx) {
+    if (spec.position && typeof node.x === "number") {
+      node.x = spec.position.x || 0;
+      node.y = spec.position.y || 0;
+    }
+    if (spec.size && typeof node.resize === "function" && spec.type !== "text" && spec.type !== "line") {
+      const w = Math.max(0.01, spec.size[0]);
+      const h = Math.max(0.01, spec.size[1]);
+      try {
+        node.resize(w, h);
+      } catch (e) {
+        console.warn("resize failed", e);
+      }
+    }
+    if ("fills" in node) {
+      if (spec.fill !== void 0) {
+        const fill = toFigmaFill(spec.fill, ctx);
+        node.fills = fill ? [fill] : [];
+      } else if (spec.background !== void 0) {
+        const fill = toFigmaFill(spec.background, ctx);
+        node.fills = fill ? [fill] : [];
+      }
+    }
+    if (spec.stroke && "strokes" in node) {
+      const stroke = spec.stroke;
+      const c = parseColor(stroke.color || stroke, ctx);
+      if (c) {
+        node.strokes = [{ type: "SOLID", color: c.color, opacity: c.opacity }];
+        if (typeof stroke.weight === "number") node.strokeWeight = stroke.weight;
+        if (stroke.align && "strokeAlign" in node) node.strokeAlign = stroke.align;
+        if (Array.isArray(stroke.dashes) && "dashPattern" in node) node.dashPattern = stroke.dashes;
+      }
+    }
+    if (spec.cornerRadius !== void 0 && "cornerRadius" in node) {
+      if (Array.isArray(spec.cornerRadius)) {
+        node.topLeftRadius = spec.cornerRadius[0] || 0;
+        node.topRightRadius = spec.cornerRadius[1] || 0;
+        node.bottomRightRadius = spec.cornerRadius[2] || 0;
+        node.bottomLeftRadius = spec.cornerRadius[3] || 0;
+      } else {
+        node.cornerRadius = spec.cornerRadius;
+      }
+    }
+    if (typeof spec.opacity === "number" && "opacity" in node) node.opacity = spec.opacity;
+    if (typeof spec.rotation === "number" && "rotation" in node) node.rotation = spec.rotation;
+    if (spec.visible === false && "visible" in node) node.visible = false;
+    if (spec.blendMode && "blendMode" in node) node.blendMode = spec.blendMode;
+    if ("effects" in node) {
+      const effects = toFigmaEffects(spec, ctx);
+      if (effects.length > 0) node.effects = effects;
+    }
+    if (spec.name && "name" in node) node.name = spec.name;
+  }
+  function parsePadding(p) {
+    if (typeof p === "number") return [p, p, p, p];
+    if (typeof p === "string") {
+      const nums = p.split(/\s+/).map(parseFloat).filter((n) => !Number.isNaN(n));
+      if (nums.length === 1) return [nums[0], nums[0], nums[0], nums[0]];
+      if (nums.length === 2) return [nums[0], nums[1], nums[0], nums[1]];
+      if (nums.length === 3) return [nums[0], nums[1], nums[2], nums[1]];
+      if (nums.length === 4) return [nums[0], nums[1], nums[2], nums[3]];
+    }
+    return [0, 0, 0, 0];
+  }
+  function applyAutoLayout(frame, autoLayout) {
+    if (!autoLayout) return;
+    frame.layoutMode = autoLayout.direction === "row" ? "HORIZONTAL" : "VERTICAL";
+    if (typeof autoLayout.gap === "number") frame.itemSpacing = autoLayout.gap;
+    const [pt, pr, pb, pl] = parsePadding(autoLayout.padding);
+    frame.paddingTop = pt;
+    frame.paddingRight = pr;
+    frame.paddingBottom = pb;
+    frame.paddingLeft = pl;
+    const alignMap = {
+      start: "MIN",
+      center: "CENTER",
+      end: "MAX",
+      stretch: "MIN"
+    };
+    const justifyMap = {
+      start: "MIN",
+      center: "CENTER",
+      end: "MAX",
+      between: "SPACE_BETWEEN"
+    };
+    if (autoLayout.alignItems) frame.counterAxisAlignItems = alignMap[autoLayout.alignItems] || "MIN";
+    if (autoLayout.justifyContent) frame.primaryAxisAlignItems = justifyMap[autoLayout.justifyContent] || "MIN";
+    if (autoLayout.wrap && "layoutWrap" in frame) frame.layoutWrap = "WRAP";
+  }
+  async function ensureFontLoaded(family, style, ctx) {
+    const key = `${family}::${style}`;
+    const font = { family, style };
+    if (ctx.loadedFonts.has(key)) return font;
+    try {
+      await figma.loadFontAsync(font);
+      ctx.loadedFonts.add(key);
+    } catch (err) {
+      console.warn(`[import] Failed to load "${family} ${style}", falling back to Inter Regular:`, err);
+      const fallback = { family: "Inter", style: "Regular" };
+      await figma.loadFontAsync(fallback);
+      ctx.loadedFonts.add("Inter::Regular");
+      return fallback;
+    }
+    return font;
+  }
+  async function preloadAllFonts(json, ctx) {
+    var _a, _b;
+    await ensureFontLoaded("Inter", "Regular", ctx);
+    const declared = ((_a = json.tokens) == null ? void 0 : _a.fonts) || [];
+    const promises = [];
+    for (const f of declared) {
+      const styles = Array.isArray(f.styles) ? f.styles : ["Regular"];
+      for (const s of styles) {
+        promises.push(ensureFontLoaded(f.family, s, ctx));
+      }
+    }
+    const ts = ((_b = json.tokens) == null ? void 0 : _b.textStyles) || {};
+    for (const name of Object.keys(ts)) {
+      const t = ts[name];
+      if (t.family) promises.push(ensureFontLoaded(t.family, t.style || "Regular", ctx));
+    }
+    walkAndCollectFonts(json.screens || [], ctx, promises);
+    walkAndCollectFonts((json.components || []).map((c) => c.node), ctx, promises);
+    await Promise.all(promises);
+  }
+  function walkAndCollectFonts(nodes, ctx, promises) {
+    for (const n of nodes) {
+      if (!n) continue;
+      if (n.type === "text" && n.textStyle && typeof n.textStyle === "object" && n.textStyle.family) {
+        promises.push(ensureFontLoaded(n.textStyle.family, n.textStyle.style || "Regular", ctx));
+      }
+      if (n.children) walkAndCollectFonts(n.children, ctx, promises);
+    }
+  }
+  function resolveTextStyle(spec, ctx) {
+    if (typeof spec.textStyle === "string") return ctx.tokens.textStyles[spec.textStyle] || {};
+    if (spec.textStyle && typeof spec.textStyle === "object") return spec.textStyle;
+    return {};
+  }
+  async function buildText(spec, ctx) {
+    var _a;
+    const t = figma.createText();
+    const style = resolveTextStyle(spec, ctx);
+    const family = style.family || "Inter";
+    const styleName = style.style || "Regular";
+    const font = await ensureFontLoaded(family, styleName, ctx);
+    t.fontName = font;
+    const size = typeof style.size === "number" ? style.size : 14;
+    t.fontSize = size;
+    t.characters = String((_a = spec.text) != null ? _a : "");
+    if (spec.name) t.name = spec.name;
+    if (spec.color) {
+      const c = parseColor(spec.color, ctx);
+      if (c) t.fills = [{ type: "SOLID", color: c.color, opacity: c.opacity }];
+    } else if (style.color) {
+      const c = parseColor(style.color, ctx);
+      if (c) t.fills = [{ type: "SOLID", color: c.color, opacity: c.opacity }];
+    }
+    if (style.lineHeight !== void 0) {
+      if (style.lineHeight === "AUTO") {
+        t.lineHeight = { unit: "AUTO" };
+      } else if (typeof style.lineHeight === "number") {
+        t.lineHeight = { unit: "PIXELS", value: style.lineHeight * size };
+      } else if (typeof style.lineHeight === "string") {
+        const m = style.lineHeight.match(/^([\d.]+)(px|%)$/);
+        if (m) {
+          const v = parseFloat(m[1]);
+          t.lineHeight = m[2] === "px" ? { unit: "PIXELS", value: v } : { unit: "PERCENT", value: v };
+        }
+      }
+    }
+    if (style.letterSpacing !== void 0) {
+      if (typeof style.letterSpacing === "number") {
+        t.letterSpacing = { unit: "PIXELS", value: style.letterSpacing };
+      } else if (typeof style.letterSpacing === "string") {
+        const m = style.letterSpacing.match(/^(-?[\d.]+)(px|%)$/);
+        if (m) {
+          t.letterSpacing = m[2] === "px" ? { unit: "PIXELS", value: parseFloat(m[1]) } : { unit: "PERCENT", value: parseFloat(m[1]) };
+        }
+      }
+    }
+    if (style.textCase) t.textCase = style.textCase;
+    if (style.textDecoration && style.textDecoration !== "NONE") t.textDecoration = style.textDecoration;
+    if (spec.align) {
+      const map = { left: "LEFT", center: "CENTER", right: "RIGHT", justify: "JUSTIFIED" };
+      t.textAlignHorizontal = map[spec.align] || "LEFT";
+    }
+    if (spec.verticalAlign) {
+      const map = { top: "TOP", center: "CENTER", bottom: "BOTTOM" };
+      t.textAlignVertical = map[spec.verticalAlign] || "TOP";
+    }
+    if (spec.autoResize === "NONE" && spec.size) {
+      t.textAutoResize = "NONE";
+      t.resize(spec.size[0], spec.size[1]);
+    } else if (spec.autoResize === "HEIGHT" || spec.size && !spec.autoResize) {
+      t.textAutoResize = "HEIGHT";
+      if (spec.size) t.resize(spec.size[0], t.height);
+    } else {
+      t.textAutoResize = "WIDTH_AND_HEIGHT";
+    }
+    if (spec.position) {
+      t.x = spec.position.x || 0;
+      t.y = spec.position.y || 0;
+    }
+    return t;
+  }
+  function buildRectangle(spec, ctx) {
+    const r = figma.createRectangle();
+    applyCommonStyles(r, spec, ctx);
+    return r;
+  }
+  function buildEllipse(spec, ctx) {
+    const e = figma.createEllipse();
+    applyCommonStyles(e, spec, ctx);
+    return e;
+  }
+  function buildLine(spec, ctx) {
+    const ln = figma.createLine();
+    if (spec.size && Array.isArray(spec.size)) {
+      ln.resize(Math.max(0.01, spec.size[0]), 0);
+    }
+    if (spec.stroke) {
+      const c = parseColor(spec.stroke.color || spec.stroke, ctx);
+      if (c) {
+        ln.strokes = [{ type: "SOLID", color: c.color, opacity: c.opacity }];
+        if (typeof spec.stroke.weight === "number") ln.strokeWeight = spec.stroke.weight;
+        if (Array.isArray(spec.stroke.dashes)) ln.dashPattern = spec.stroke.dashes;
+      }
+    }
+    if (spec.position) {
+      ln.x = spec.position.x || 0;
+      ln.y = spec.position.y || 0;
+    }
+    if (spec.rotation) ln.rotation = spec.rotation;
+    if (spec.name) ln.name = spec.name;
+    return ln;
+  }
+  function buildVector(spec, ctx) {
+    if (!spec.paths || spec.paths.length === 0) {
+      console.warn("[import] vector has no paths");
+      return null;
+    }
+    const size = spec.size || [24, 24];
+    const viewBox = spec.viewBox || [0, 0, size[0], size[1]];
+    const svgPaths = spec.paths.map((p) => {
+      const attrs = [`d="${p.d}"`];
+      if (p.fill !== void 0) attrs.push(`fill="${p.fill}"`);
+      if (p.stroke) attrs.push(`stroke="${p.stroke}"`);
+      if (p.strokeWidth !== void 0) attrs.push(`stroke-width="${p.strokeWidth}"`);
+      if (p.strokeLinecap) attrs.push(`stroke-linecap="${p.strokeLinecap}"`);
+      if (p.strokeLinejoin) attrs.push(`stroke-linejoin="${p.strokeLinejoin}"`);
+      return `<path ${attrs.join(" ")} />`;
+    }).join("");
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox.join(" ")}" width="${size[0]}" height="${size[1]}">${svgPaths}</svg>`;
+    let node;
+    try {
+      node = figma.createNodeFromSvg(svg);
+    } catch (err) {
+      console.warn("[import] createNodeFromSvg failed:", err);
+      return null;
+    }
+    if (spec.name) node.name = spec.name;
+    if (spec.position) {
+      node.x = spec.position.x || 0;
+      node.y = spec.position.y || 0;
+    }
+    if (typeof spec.opacity === "number") node.opacity = spec.opacity;
+    if (typeof spec.rotation === "number") node.rotation = spec.rotation;
+    return node;
+  }
+
+  // scripts/import-design.ts
+  var CLIENT_STORAGE_KEY2 = "import-design-last-json";
+  async function buildNode(spec, ctx) {
+    var _a;
+    if (!spec || !spec.type) return null;
+    switch (spec.type) {
+      case "text":
+        return await buildText(spec, ctx);
+      case "rectangle":
+        return buildRectangle(spec, ctx);
+      case "ellipse":
+        return buildEllipse(spec, ctx);
+      case "line":
+        return buildLine(spec, ctx);
+      case "vector":
+        return buildVector(spec, ctx);
+      case "frame": {
+        const f = figma.createFrame();
+        applyCommonStyles(f, spec, ctx);
+        if (spec.autoLayout) {
+          applyAutoLayout(f, spec.autoLayout);
+          if (spec.size) {
+            f.primaryAxisSizingMode = "FIXED";
+            f.counterAxisSizingMode = "FIXED";
+            try {
+              f.resize(spec.size[0], spec.size[1]);
+            } catch (e) {
+            }
+          }
+        }
+        if (Array.isArray(spec.children)) {
+          const stretch = spec.autoLayout && spec.autoLayout.alignItems === "stretch";
+          for (const childSpec of spec.children) {
+            const child = await buildNode(childSpec, ctx);
+            if (child) {
+              f.appendChild(child);
+              if (stretch && "layoutAlign" in child) {
+                child.layoutAlign = "STRETCH";
+              }
+            }
+          }
+        }
+        return f;
+      }
+      case "group": {
+        if (!Array.isArray(spec.children) || spec.children.length === 0) return null;
+        const children = [];
+        for (const childSpec of spec.children) {
+          const child = await buildNode(childSpec, ctx);
+          if (child) {
+            figma.currentPage.appendChild(child);
+            children.push(child);
+          }
+        }
+        if (children.length === 0) return null;
+        const g = figma.group(children, figma.currentPage);
+        if (spec.name) g.name = spec.name;
+        if (spec.position) {
+          g.x = spec.position.x || 0;
+          g.y = spec.position.y || 0;
+        }
+        if (typeof spec.opacity === "number") g.opacity = spec.opacity;
+        return g;
+      }
+      case "instance": {
+        const compName = spec.component;
+        const comp = ctx.components.get(compName);
+        if (!comp) {
+          console.warn(`[import] unknown component "${compName}"`);
+          return null;
+        }
+        const inst = comp.createInstance();
+        if (spec.name) inst.name = spec.name;
+        if (spec.position) {
+          inst.x = spec.position.x || 0;
+          inst.y = spec.position.y || 0;
+        }
+        return inst;
+      }
+      case "image": {
+        const r = figma.createRectangle();
+        applyCommonStyles(r, spec, ctx);
+        if ((_a = spec.image) == null ? void 0 : _a.data) {
+          try {
+            const cleanB64 = spec.image.data.replace(/^data:image\/[^;]+;base64,/, "");
+            const bytes = figma.base64Decode(cleanB64);
+            const image = figma.createImage(bytes);
+            const scaleMode = (spec.image.scaleMode || "FILL").toUpperCase();
+            r.fills = [{ type: "IMAGE", imageHash: image.hash, scaleMode }];
+          } catch (err) {
+            console.warn("[import] failed to decode image:", err);
+          }
+        }
+        return r;
+      }
+      default:
+        console.warn(`[import] unknown node type: ${spec.type}`);
+        return null;
+    }
+  }
+  async function buildScreens(json, ctx) {
+    const screens = [];
+    let xOffset = 0;
+    const gap = 100;
+    for (const screenSpec of json.screens || []) {
+      const frame = figma.createFrame();
+      frame.name = screenSpec.name || "Screen";
+      const w = screenSpec.size && screenSpec.size[0] || 375;
+      const h = screenSpec.size && screenSpec.size[1] || 812;
+      frame.resize(w, h);
+      frame.x = xOffset;
+      frame.y = 0;
+      frame.clipsContent = screenSpec.clipsContent !== false;
+      if (screenSpec.background) {
+        applyCommonStyles(frame, { fill: screenSpec.background }, ctx);
+      }
+      if (screenSpec.autoLayout) {
+        applyAutoLayout(frame, screenSpec.autoLayout);
+        frame.primaryAxisSizingMode = "FIXED";
+        frame.counterAxisSizingMode = "FIXED";
+        try {
+          frame.resize(w, h);
+        } catch (e) {
+        }
+      }
+      if (Array.isArray(screenSpec.children)) {
+        const stretch = screenSpec.autoLayout && screenSpec.autoLayout.alignItems === "stretch";
+        for (const childSpec of screenSpec.children) {
+          const child = await buildNode(childSpec, ctx);
+          if (child) {
+            frame.appendChild(child);
+            if (stretch && "layoutAlign" in child) {
+              child.layoutAlign = "STRETCH";
+            }
+          }
+        }
+      }
+      figma.currentPage.appendChild(frame);
+      screens.push(frame);
+      xOffset += w + gap;
+    }
+    return screens;
+  }
+  async function buildComponents(json, ctx) {
+    if (!Array.isArray(json.components)) return;
+    for (const comp of json.components) {
+      const node = await buildNode(comp.node, ctx);
+      if (!node) continue;
+      const component = figma.createComponent();
+      component.name = comp.name;
+      if ("width" in node && "height" in node) {
+        component.resize(node.width, node.height);
+      }
+      component.appendChild(node);
+      ctx.components.set(comp.name, component);
+      component.x = -3e3;
+      component.y = -3e3 + (ctx.components.size - 1) * 300;
+    }
+  }
+  var importDesign = {
+    id: "import-design",
+    name: "Import Design from JSON",
+    description: "Build a Figma design from a JSON spec (paste in next view)",
+    hasConfig: true,
+    async run(options) {
+      const raw = options && options.json || "";
+      if (!raw.trim()) {
+        figma.notify("Paste your JSON in the Configure view first.");
+        return;
+      }
+      let json;
+      try {
+        json = JSON.parse(raw);
+      } catch (err) {
+        figma.notify("Invalid JSON: " + (err.message || err));
+        return;
+      }
+      try {
+        await figma.clientStorage.setAsync(CLIENT_STORAGE_KEY2, raw.slice(0, 1e5));
+      } catch (e) {
+      }
+      const ctx = {
+        tokens: {
+          colors: json.tokens && json.tokens.colors || {},
+          textStyles: json.tokens && json.tokens.textStyles || {}
+        },
+        components: /* @__PURE__ */ new Map(),
+        loadedFonts: /* @__PURE__ */ new Set()
+      };
+      figma.notify("Loading fonts\u2026");
+      await preloadAllFonts(json, ctx);
+      figma.notify("Building components\u2026");
+      await buildComponents(json, ctx);
+      figma.notify("Building screens\u2026");
+      const screens = await buildScreens(json, ctx);
+      if (screens.length > 0) {
+        figma.viewport.scrollAndZoomIntoView(screens);
+        figma.currentPage.selection = screens;
+      }
+      figma.notify(`Imported ${screens.length} screen(s).`);
+      const report = {
+        imported: screens.length,
+        screens: screens.map((s) => ({ name: s.name, size: [s.width, s.height] })),
+        components: Array.from(ctx.components.keys()),
+        fontsLoaded: Array.from(ctx.loadedFonts)
+      };
+      figma.ui.postMessage({
+        type: "json-output",
+        json: JSON.stringify(report, null, 2),
+        screenCount: screens.length,
+        componentCount: ctx.components.size,
+        imageCount: 0
+      });
+    }
+  };
+  var import_design_default = importDesign;
+
   // scripts/index.ts
   var scripts = [
     square_to_circle_default,
     thinking_div_default,
     screen_to_json_default,
-    project_blueprint_default
+    project_blueprint_default,
+    import_design_default,
+    claude_test_default
     // Add new scripts here:
     // import myNewScript from './my-new-script';
     // myNewScript,

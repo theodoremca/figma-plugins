@@ -417,6 +417,216 @@ export async function enrichSingleScreen(
   }
 }
 
+// ---- Backend Spec Mode ----
+// Analyze ONE screen and generate backend/API requirements (not visual details)
+
+const BACKEND_SPEC_SYSTEM_PROMPT = `You are a senior backend architect. You receive a Figma screen JSON and generate a BACKEND SPECIFICATION for that screen.
+
+Your job is to identify what a backend engineer needs to build to support this screen. IGNORE visual details like colors, fonts, spacing.
+
+Focus on:
+- INPUTS: form fields the user enters (email, password, search text, etc.)
+- DATA REQUIREMENTS: what data the screen displays (entities, fields, relationships)
+- API CALLS: endpoints needed (method, path, request body, response shape, error cases)
+- USER ACTIONS: buttons/interactions that trigger API calls (submit, delete, save, share)
+- STATE: what client-side state this screen likely needs (loading, error, success, validation)
+- AUTH: does this screen require authentication? any role/permission needed?
+- NAVIGATION: where does the user go after actions complete?
+
+Rules:
+- Infer from screen content, labels, UI patterns — make educated guesses for field types and endpoints
+- Use REST conventions for endpoints (GET /resource, POST /resource, PUT /resource/:id, DELETE /resource/:id)
+- Fields should include: name, type (string/number/boolean/array/object), validation if implied, required flag
+- Be specific — "GET /products" not "get some data"
+- If a screen is purely decorative (splash, onboarding illustrations), say so with minimal detail
+- Return ONLY valid JSON, no markdown
+
+Response schema:
+{
+  "screenName": "string",
+  "purpose": "what this screen does from a data perspective",
+  "requiresAuth": true/false,
+  "inputs": [
+    { "field": "name", "type": "string", "validation": "optional string", "required": true/false, "placeholder": "optional" }
+  ],
+  "dataRequirements": [
+    {
+      "entity": "User | Product | Post | ...",
+      "fields": ["field1", "field2"],
+      "source": "GET /endpoint",
+      "pagination": "optional string hint",
+      "filtering": ["optional filter fields"]
+    }
+  ],
+  "apiCalls": [
+    {
+      "trigger": "what causes this call (screen load, button click, etc.)",
+      "method": "GET/POST/PUT/DELETE/PATCH",
+      "endpoint": "/path/:id",
+      "requestBody": { "field": "type" },
+      "responseBody": { "field": "type" },
+      "errorCases": ["string descriptions"]
+    }
+  ],
+  "userActions": [
+    { "name": "button label", "triggers": "ref to apiCalls or navigation", "sideEffects": "optional" }
+  ],
+  "stateNeeded": ["loading", "error", "success", "validationErrors", "etc"],
+  "navigationOnSuccess": "optional — where user goes after success",
+  "inferredEntities": [
+    { "name": "EntityName", "fields": [{ "name": "field", "type": "string" }] }
+  ]
+}`;
+
+export interface BackendSpec {
+  screenName: string;
+  purpose: string;
+  requiresAuth: boolean;
+  inputs: Array<{ field: string; type: string; validation?: string; required: boolean; placeholder?: string }>;
+  dataRequirements: Array<{ entity: string; fields: string[]; source?: string; pagination?: string; filtering?: string[] }>;
+  apiCalls: Array<{ trigger: string; method: string; endpoint: string; requestBody?: any; responseBody?: any; errorCases?: string[] }>;
+  userActions: Array<{ name: string; triggers?: string; sideEffects?: string }>;
+  stateNeeded: string[];
+  navigationOnSuccess?: string;
+  inferredEntities: Array<{ name: string; fields: Array<{ name: string; type: string }> }>;
+}
+
+export interface BackendSpecResult {
+  spec: BackendSpec;
+  usage: AIUsage;
+}
+
+export async function generateBackendSpec(
+  screen: any,
+  settings: AISettings
+): Promise<BackendSpecResult | null> {
+  try {
+    const startTime = Date.now();
+    const trimmed = trimForAI(screen, 0, 3);
+    const prompt = `Generate the backend specification for this screen:\n\n${JSON.stringify(trimmed, null, 2)}`;
+
+    const result = await callAI(prompt, BACKEND_SPEC_SYSTEM_PROMPT, settings);
+    const durationMs = Date.now() - startTime;
+    const model = settings.provider === 'ollama' ? settings.ollamaModel : settings.geminiModel;
+
+    const parsed = JSON.parse(result.text);
+    const spec: BackendSpec = {
+      screenName: parsed.screenName || screen.name || 'Unknown',
+      purpose: parsed.purpose || '',
+      requiresAuth: !!parsed.requiresAuth,
+      inputs: Array.isArray(parsed.inputs) ? parsed.inputs : [],
+      dataRequirements: Array.isArray(parsed.dataRequirements) ? parsed.dataRequirements : [],
+      apiCalls: Array.isArray(parsed.apiCalls) ? parsed.apiCalls : [],
+      userActions: Array.isArray(parsed.userActions) ? parsed.userActions : [],
+      stateNeeded: Array.isArray(parsed.stateNeeded) ? parsed.stateNeeded : [],
+      navigationOnSuccess: parsed.navigationOnSuccess,
+      inferredEntities: Array.isArray(parsed.inferredEntities) ? parsed.inferredEntities : [],
+    };
+
+    const usage: AIUsage = {
+      provider: settings.provider,
+      model,
+      promptTokens: result.usage.promptTokens,
+      completionTokens: result.usage.completionTokens,
+      totalTokens: result.usage.totalTokens,
+      estimatedCostUSD: estimateCost(model, result.usage.promptTokens, result.usage.completionTokens),
+      durationMs,
+    };
+    return { spec, usage };
+  } catch (err: any) {
+    console.error('Backend spec generation failed:', err);
+    return null;
+  }
+}
+
+// ---- Combine all backend specs into a project-level data model ----
+
+const COMBINE_BACKEND_SYSTEM_PROMPT = `You are a senior backend architect. You receive backend specs from multiple screens and produce a consolidated data model and API plan for the whole project.
+
+Rules:
+- Merge duplicate entities across screens into a single canonical definition
+- Build a unified list of API endpoints (dedupe where screens share endpoints)
+- Identify likely authentication/authorization patterns
+- List suggested database tables with fields and relationships
+- Be concise but complete
+- Return ONLY valid JSON, no markdown
+
+Response schema:
+{
+  "summary": "short paragraph about what this backend needs to do",
+  "authStrategy": "e.g. JWT, OAuth2, session-based + any role system",
+  "dataModel": [
+    {
+      "name": "EntityName",
+      "fields": [{ "name": "field", "type": "string/number/etc", "required": true, "unique": false, "notes": "optional" }],
+      "relationships": [{ "to": "OtherEntity", "type": "one-to-many/many-to-many/etc", "via": "foreign key name" }]
+    }
+  ],
+  "endpoints": [
+    { "method": "GET", "path": "/resource", "purpose": "string", "authRequired": true, "usedByScreens": ["screen names"] }
+  ],
+  "thirdPartyIntegrations": [
+    { "name": "e.g. Stripe, SendGrid, Firebase Auth", "purpose": "string", "inferredFromScreens": ["screen names"] }
+  ],
+  "notes": "anything worth flagging (missing screens, inconsistencies, assumptions made)"
+}`;
+
+export interface ProjectBackendPlan {
+  summary: string;
+  authStrategy: string;
+  dataModel: Array<{
+    name: string;
+    fields: Array<{ name: string; type: string; required?: boolean; unique?: boolean; notes?: string }>;
+    relationships?: Array<{ to: string; type: string; via?: string }>;
+  }>;
+  endpoints: Array<{ method: string; path: string; purpose: string; authRequired: boolean; usedByScreens: string[] }>;
+  thirdPartyIntegrations: Array<{ name: string; purpose: string; inferredFromScreens: string[] }>;
+  notes: string;
+}
+
+export interface ProjectBackendPlanResult {
+  plan: ProjectBackendPlan;
+  usage: AIUsage;
+}
+
+export async function combineBackendSpecs(
+  specs: BackendSpec[],
+  settings: AISettings
+): Promise<ProjectBackendPlanResult | null> {
+  if (specs.length === 0) return null;
+  try {
+    const startTime = Date.now();
+    const prompt = `Consolidate these per-screen backend specs into a project-wide data model and API plan:\n\n${JSON.stringify(specs, null, 2)}`;
+    const result = await callAI(prompt, COMBINE_BACKEND_SYSTEM_PROMPT, settings);
+    const durationMs = Date.now() - startTime;
+    const model = settings.provider === 'ollama' ? settings.ollamaModel : settings.geminiModel;
+
+    const parsed = JSON.parse(result.text);
+    const plan: ProjectBackendPlan = {
+      summary: parsed.summary || '',
+      authStrategy: parsed.authStrategy || '',
+      dataModel: Array.isArray(parsed.dataModel) ? parsed.dataModel : [],
+      endpoints: Array.isArray(parsed.endpoints) ? parsed.endpoints : [],
+      thirdPartyIntegrations: Array.isArray(parsed.thirdPartyIntegrations) ? parsed.thirdPartyIntegrations : [],
+      notes: parsed.notes || '',
+    };
+
+    const usage: AIUsage = {
+      provider: settings.provider,
+      model,
+      promptTokens: result.usage.promptTokens,
+      completionTokens: result.usage.completionTokens,
+      totalTokens: result.usage.totalTokens,
+      estimatedCostUSD: estimateCost(model, result.usage.promptTokens, result.usage.completionTokens),
+      durationMs,
+    };
+    return { plan, usage };
+  } catch (err: any) {
+    console.error('Combine backend specs failed:', err);
+    return null;
+  }
+}
+
 /** Final flow analysis — combines all per-screen summaries into overall flow description */
 const COMBINE_SYSTEM_PROMPT = `You are a UX analyst. You receive summaries of multiple screens and produce a final flow analysis.
 
